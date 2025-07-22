@@ -1,0 +1,28 @@
+{
+    "managed_alarms": [
+        {
+            "hour": 9,
+            "minute": 0,
+            "enabled": true,
+            "name": "Morning Alarm"
+        },
+        {
+            "hour": 11,
+            "minute": 0,
+            "enabled": true,
+            "name": "Lunch Reminder"
+        },
+        {
+            "hour": 14,
+            "minute": 0,
+            "enabled": true,
+            "name": "Afternoon Break"
+        },
+        {
+            "hour": 17,
+            "minute": 0,
+            "enabled": true,
+            "name": "End of Day"
+        }
+    ]
+}

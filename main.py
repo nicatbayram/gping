@@ -474,11 +474,14 @@ class PingApp(QWidget):
         # Ping results list
         self.ping_result_list = QListWidget()
         self.ping_result_list.setObjectName("PingResultList")
+        self.ping_result_list.setFont(QFont("Arial", 14))  # Increased font size
         
         layout.addWidget(self.title_label)
         layout.addWidget(self.connection_status)
         layout.addWidget(self.target_label)
         layout.addWidget(self.ping_result_list)
+        layout.setContentsMargins(15, 15, 15, 15)
+        layout.setSpacing(10)
         return panel
 
     def create_alarm_panel(self):
@@ -494,7 +497,7 @@ class PingApp(QWidget):
         self.current_time_label = QLabel()
         self.current_time_label.setObjectName("CurrentTimeLabel")
         # Increase clock font size for larger window
-        self.current_time_label.setFont(QFont("Segoe UI", 36 * 2, QFont.Bold)) 
+        self.current_time_label.setFont(QFont("Segoe UI", 48, QFont.Bold)) 
         self.current_time_label.setAlignment(Qt.AlignCenter)
 
         # Alarm Status
@@ -535,6 +538,8 @@ class PingApp(QWidget):
         layout.addWidget(self.daily_alarms_title)
         layout.addWidget(self.managed_alarms_list)
         layout.addLayout(alarm_btn_layout)
+        layout.setContentsMargins(15, 15, 15, 15)
+        layout.setSpacing(10)
 
         return panel
 
@@ -735,6 +740,10 @@ class PingApp(QWidget):
             QMenuBar::item:selected { background-color: #c0c0c0; }
             QMenu { background-color: #f0f0f0; border: 1px solid #ccc; }
             QMenu::item:selected { background-color: #a8d8ff; }
+            QListWidget {
+            font-size: 12px;  # Or whatever size you prefer
+            alternate-background-color: #3a3a3a;  # For dark mode
+            alternate-background-color: #f5f5f5;  # For light mode}
         """
         dark_style = """
             QWidget { background-color: #2b2b2b; color: #e0e0e0; }
@@ -869,7 +878,7 @@ class PingApp(QWidget):
             
             self.update_alarm_list_ui() # Refresh the UI
             self.save_alarms_data()
-            self.reschedule_all_alarms() # Reschedule remaining alarms
+            
 
     def toggle_alarm_enabled(self, item):
         """Toggles the enabled status of an alarm when its checkbox is clicked."""
