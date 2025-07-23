@@ -15,18 +15,17 @@ from PyQt5.QtWidgets import (
     QGridLayout, QScrollArea, QSizePolicy, QFileDialog,
     QInputDialog, QMenu, QAction, QMenuBar, QSystemTrayIcon,
     QDialog, QFormLayout, QComboBox, QSpinBox, QListWidgetItem,
-    QCheckBox, QTimeEdit
+    QCheckBox, QTimeEdit, QGraphicsDropShadowEffect
 )
-from PyQt5.QtCore import QTimer, Qt, pyqtSignal, QObject, QThread, QTime
-from PyQt5.QtGui import QFont, QPalette, QColor, QIcon, QCursor
+from PyQt5.QtCore import QTimer, Qt, pyqtSignal, QObject, QThread, QTime, QPropertyAnimation, QEasingCurve
+from PyQt5.QtGui import QFont, QPalette, QColor, QIcon, QCursor, QLinearGradient, QGradient, QPainter, QBrush
+import pyqtgraph as pg  # Added for graphing
 
 # Conditional import for winsound (Windows only)
 try:
     import winsound
 except ImportError:
     winsound = None
-    
-
 
 # Third-party imports
 try:
@@ -51,6 +50,45 @@ active_alarm_timestamps = [] # This list will hold UNIX timestamps for active al
 # Flag to indicate if an alarm is currently ringing
 active_alarm_ringing = False
 
+# --- Modern Color Palette ---
+COLORS = {
+    'dark': {
+        'primary': '#1E1E1E',
+        'secondary': '#1E1E1E',
+        'tertiary': '#252525',
+        'accent_blue': '#4A9AFF',  
+        'accent_green': "#3DDC97",  
+        'accent_red': "#FF5E5B",    
+        'accent_orange': '#FF9F1C', 
+        'text_primary': '#FFFFFF',
+        'text_secondary': '#E0E0E0',
+        'text_muted': '#A0A0A0',
+        'border': '#383838',
+        'success_bg': "#3DDC97FF",  
+        'error_bg': "#FF5E5B20",
+        'warning_bg': '#FF9F1C20',
+        'hover': 'rgba(255, 255, 255, 0.08)',
+        'active': 'rgba(255, 255, 255, 0.16)'
+    },
+    'light': {
+        'primary': '#F5F7FA',
+        'secondary': '#F5F7FA',
+        'tertiary': '#E1E5EB',
+        'accent_blue': '#1A73E8',   
+        'accent_green': '#0B8043',  
+        'accent_red': '#D32F2F',    
+        'accent_orange': '#F57C00', 
+        'text_primary': '#202124',
+        'text_secondary': '#5F6368',
+        'text_muted': '#80868B',
+        'border': '#DADCE0',
+        'success_bg': '#0B804320',
+        'error_bg': '#D32F2F20',
+        'warning_bg': '#F57C0020',
+        'hover': 'rgba(0, 0, 0, 0.04)',
+        'active': 'rgba(0, 0, 0, 0.08)'
+    }
+}
 
 # --- Alarm Class ---
 class Alarm:
@@ -91,7 +129,6 @@ class Alarm:
         """String representation for display."""
         status = " (Enabled)" if self.enabled else " (Disabled)"
         return f"{self.hour:02d}:{self.minute:02d} - {self.name}{status}"
-
 
 # --- Helper Functions ---
 def ping_host(host, timeout=1):
@@ -182,19 +219,18 @@ class SoundManager(QObject):
         else:
             print(f"Non-Windows system or winsound not available. Sound: {sound_file}, Loop: {loop}")
 
-
     def stop_alarm(self):
         """Stops the looping alarm sound."""
         self._stop_requested.set()
         if platform.system().lower() == "windows" and winsound:
             winsound.PlaySound(None, winsound.SND_PURGE) # Stop all sounds
 
-
 # --- Worker Threads ---
 class PingThread(QThread):
     """Thread for continuously pinging the DNS server."""
     update_signal = pyqtSignal(str, bool) # Message, is_success
     status_signal = pyqtSignal(str, str)  # Status message, CSS class
+    ping_result_signal = pyqtSignal(float) # Ping response time in ms
 
     def __init__(self, sound_manager):
         super().__init__()
@@ -212,17 +248,18 @@ class PingThread(QThread):
             if response is not None:
                 self.consecutive_errors = 0
                 self.last_success_time = time.time()
-                msg = f"[{now_str}] ✅ {('Successful' if english_language else 'Uğurlu')} → {response:.1f} ms"
-                status_msg = f"🟢 {('Internet: Good' if english_language else 'İnternet: Yaxşı')}"
+                msg = f"[{now_str}] 🟢 {('Successful' if english_language else 'Uğurlu')} → {response:.1f} ms"
+                status_msg = f"✓ {('Internet: Good' if english_language else 'İnternet: Yaxşı')}"
                 self.status_signal.emit(status_msg, "status-good")
                 self.update_signal.emit(msg, True)
+                self.ping_result_signal.emit(response)  # Emit the ping result for graphing
             else:
                 self.consecutive_errors += 1
                 elapsed = time.time() - self.last_success_time
-                msg = f"[{now_str}] ❌ {('Failed' if english_language else 'Uğursuz')} → Timeout ({elapsed:.1f}s)"
+                msg = f"[{now_str}] 🔴 {('Failed' if english_language else 'Uğursuz')} → Timeout ({elapsed:.1f}s)"
                 self.update_signal.emit(msg, False)
                 if self.consecutive_errors >= self.max_errors_before_sound:
-                    status_msg = f"🔴 {('Internet: Poor' if english_language else 'İnternet: Zəif')}"
+                    status_msg = f" ✗ {('Internet: Poor' if english_language else 'İnternet: Zəif')}"
                     self.status_signal.emit(status_msg, "status-error")
                     self.sound_manager.play("error")
 
@@ -231,7 +268,6 @@ class PingThread(QThread):
     def stop(self):
         self.running = False
         self.wait()
-
 
 class AlarmThread(QThread):
     """Thread for monitoring and triggering alarms."""
@@ -256,8 +292,6 @@ class AlarmThread(QThread):
                 alarm_time = datetime.fromtimestamp(alarm_timestamp)
                 
                 # Check if it's time and if it hasn't been triggered for this minute yet
-                # We also check if the alarm_time is in the past, accounting for possible small delays.
-                # It should trigger only once per minute for a given alarm.
                 if now.hour == alarm_time.hour and \
                    now.minute == alarm_time.minute and \
                    (alarm_time.hour, alarm_time.minute) not in self.triggered_today:
@@ -268,7 +302,6 @@ class AlarmThread(QThread):
                     alarm_msg = f"🚨 {('Alarm is ringing!' if english_language else 'Zəngli Saat İşləyir!')}"
                     self.alarm_signal.emit(alarm_msg)
                     self.sound_manager.play("alarm")
-                    # We don't remove the timestamp, allowing reschedule logic to handle it
             time.sleep(1)
 
     def stop(self):
@@ -294,16 +327,19 @@ class SettingsDialog(QDialog):
 
         # DNS Server
         self.dns_input = QLineEdit(DNS_SERVER)
+        self.dns_input.setProperty("class", "input-field")
         layout.addRow(QLabel("DNS/IP Server:"), self.dns_input)
 
         # Ping Interval
         self.ping_interval_spin = QSpinBox()
         self.ping_interval_spin.setMinimum(1); self.ping_interval_spin.setMaximum(60); self.ping_interval_spin.setValue(PING_INTERVAL)
+        self.ping_interval_spin.setProperty("class", "input-field")
         layout.addRow(QLabel(f"{('Ping Interval (s):' if english_language else 'Ping Aralığı (s):')}"), self.ping_interval_spin)
 
         # Ping Timeout
         self.ping_timeout_spin = QSpinBox()
         self.ping_timeout_spin.setMinimum(1); self.ping_timeout_spin.setMaximum(10); self.ping_timeout_spin.setValue(PING_TIMEOUT)
+        self.ping_timeout_spin.setProperty("class", "input-field")
         layout.addRow(QLabel(f"{('Ping Timeout (s):' if english_language else 'Ping Zaman Aşımı (s):')}"), self.ping_timeout_spin)
         
         # Language
@@ -311,6 +347,7 @@ class SettingsDialog(QDialog):
         self.language_combo.addItem("English", True)
         self.language_combo.addItem("Azərbaycanca", False)
         self.language_combo.setCurrentIndex(0 if english_language else 1)
+        self.language_combo.setProperty("class", "input-field")
         layout.addRow(QLabel("Language:" if english_language else "Dil:"), self.language_combo)
 
         # Theme
@@ -318,60 +355,111 @@ class SettingsDialog(QDialog):
         self.theme_combo.addItem("Light", False)
         self.theme_combo.addItem("Dark", True)
         self.theme_combo.setCurrentIndex(1 if dark_mode else 0)
+        self.theme_combo.setProperty("class", "input-field")
         layout.addRow(QLabel("Theme:" if english_language else "Mövzu:"), self.theme_combo)
 
         # Sound file buttons
         self.error_sound_label = QLabel(os.path.basename(ERROR_SOUND_FILE))
         change_error_sound_btn = QPushButton("Browse..." if english_language else "Gözat...")
+        change_error_sound_btn.setProperty("class", "browse-btn")
         change_error_sound_btn.clicked.connect(self._select_error_sound)
         error_sound_layout = QHBoxLayout(); error_sound_layout.addWidget(self.error_sound_label); error_sound_layout.addWidget(change_error_sound_btn)
         layout.addRow(QLabel("Error Sound:" if english_language else "Xəta Səsi:"), error_sound_layout)
 
         self.alarm_sound_label = QLabel(os.path.basename(ALARM_SOUND_FILE))
         change_alarm_sound_btn = QPushButton("Browse..." if english_language else "Gözat...")
+        change_alarm_sound_btn.setProperty("class", "browse-btn")
         change_alarm_sound_btn.clicked.connect(self._select_alarm_sound)
         alarm_sound_layout = QHBoxLayout(); alarm_sound_layout.addWidget(self.alarm_sound_label); alarm_sound_layout.addWidget(change_alarm_sound_btn)
         layout.addRow(QLabel("Alarm Sound:" if english_language else "Alarm Səsi:"), alarm_sound_layout)
         
         # Save button
         save_button = QPushButton("Save" if english_language else "Yadda Saxla")
+        save_button.setProperty("class", "save-btn")
         save_button.clicked.connect(self.save_settings)
         layout.addRow(save_button)
 
         self.setLayout(layout)
 
     def apply_theme_to_dialog(self):
-        style = ""
-        if dark_mode:
-            style = """
-                QDialog { background-color: #353535; }
-                QLabel, QCheckBox { color: white; }
-                QLineEdit, QSpinBox, QComboBox, QTimeEdit {
-                    background-color: #252525; border: 1px solid #444; color: white; padding: 5px;
-                }
-                QPushButton {
-                    background-color: #555; color: white; border: 1px solid #666;
-                    padding: 5px; border-radius: 4px;
-                }
-                QPushButton:hover { background-color: #666; }
-                QPushButton:pressed { background-color: #444; }
-            """
-        else: # Light mode
-            style = """
-                QDialog { background-color: #f0f0f0; }
-                QLabel, QCheckBox { color: black; }
-                QLineEdit, QSpinBox, QComboBox, QTimeEdit {
-                    background-color: white; border: 1px solid #ccc; color: black; padding: 5px;
-                }
-                QPushButton {
-                    background-color: #f0f0f0; border: 1px solid #ccc;
-                    padding: 5px; border-radius: 4px;
-                }
-                QPushButton:hover { background-color: #e0e0e0; }
-                QPushButton:pressed { background-color: #d0d0d0; }
-            """
+        """Applies the selected theme to the settings dialog."""
+        colors = COLORS['dark'] if dark_mode else COLORS['light']
+        
+        style = f"""
+            QDialog {{
+                background-color: {colors['primary']};
+                color: {colors['text_primary']};
+                font-family: 'Segoe UI', Arial, sans-serif;
+            }}
+            
+            QLabel {{
+                color: {colors['text_primary']};
+                font-size: 14px;
+            }}
+            
+            .input-field {{
+                background-color: {colors['secondary']};
+                border: 1px solid {colors['border']};
+                border-radius: 6px;
+                padding: 8px;
+                color: {colors['text_primary']};
+                font-size: 14px;
+                min-height: 36px;
+            }}
+            
+            QLineEdit.input-field {{
+                padding: 8px 12px;
+            }}
+            
+            .browse-btn, .save-btn {{
+                background-color: {colors['tertiary']};
+                border: 1px solid {colors['border']};
+                border-radius: 6px;
+                padding: 8px 16px;
+                color: {colors['text_primary']};
+                font-size: 14px;
+                min-width: 100px;
+            }}
+            
+            .browse-btn:hover, .save-btn:hover {{
+                background-color: {colors['hover']};
+            }}
+            
+            .browse-btn:pressed, .save-btn:pressed {{
+                background-color: {colors['active']};
+            }}
+            
+            .save-btn {{
+                background-color: {colors['accent_blue']};
+                color: white;
+                font-weight: bold;
+                margin-top: 20px;
+            }}
+            
+            .save-btn:hover {{
+                background-color: {colors['accent_blue']};
+                opacity: 0.9;
+            }}
+            
+            QComboBox::drop-down {{
+                subcontrol-origin: padding;
+                subcontrol-position: top right;
+                width: 20px;
+                border-left-width: 1px;
+                border-left-color: {colors['border']};
+                border-left-style: solid;
+                border-top-right-radius: 6px;
+                border-bottom-right-radius: 6px;
+            }}
+            
+            QComboBox QAbstractItemView {{
+                background-color: {colors['secondary']};
+                border: 1px solid {colors['border']};
+                selection-background-color: {colors['accent_blue']};
+                selection-color: white;
+            }}
+        """
         self.setStyleSheet(style)
-
 
     def _select_sound(self, label_widget, sound_type):
         title = f"Select {sound_type.capitalize()} Sound" if english_language else f"{sound_type.capitalize()} Səsi Seçin"
@@ -403,7 +491,6 @@ class SettingsDialog(QDialog):
         self.settings_changed.emit()
         self.accept()
 
-
 # --- Main Application Window ---
 class PingApp(QWidget):
     def __init__(self):
@@ -414,6 +501,11 @@ class PingApp(QWidget):
 
         self.ping_thread = PingThread(self.sound_manager)
         self.alarm_thread = AlarmThread(self.sound_manager)
+
+        # Data for graphing
+        self.ping_data = []
+        self.time_data = []
+        self.max_data_points = 60  # Show last 60 points (1 minute at 1 second interval)
 
         self.init_ui()
         self.init_threads_and_timers()
@@ -430,26 +522,36 @@ class PingApp(QWidget):
     def init_ui(self):
         """Initializes the main UI layout and widgets."""
         self.setWindowTitle("🚀 DNS Ping & Alarm Monitor")
-        # Increase dimensions by 2.5 times
-        self.original_width = 600
-        self.original_height = 400
-        self.setGeometry(1000, 200, int(self.original_width * 2.5), int(self.original_height * 2.5))
+        # Increase dimensions to accommodate the graph
+        self.original_width = 800
+        self.original_height = 600
+        self.setGeometry(1000, 200, int(self.original_width * 1.5), int(self.original_height * 1.5))
         self.setWindowIcon(QIcon('icon.png'))
 
         main_layout = QVBoxLayout(self)
+        main_layout.setContentsMargins(15, 15, 15, 15)
+        main_layout.setSpacing(15)
         self.main_frame = QFrame()
         grid = QGridLayout(self.main_frame)
+        grid.setContentsMargins(0, 0, 0, 0)
+        grid.setSpacing(15)
 
         # --- Ping Panel ---
         ping_panel = self.create_ping_panel()
-        grid.addWidget(ping_panel, 0, 0)
+        grid.addWidget(ping_panel, 0, 0, 1, 2)  # Span 2 columns
+
+        # --- Graph Panel ---
+        graph_panel = self.create_graph_panel()
+        grid.addWidget(graph_panel, 1, 0)
 
         # --- Alarm Panel ---
         alarm_panel = self.create_alarm_panel()
-        grid.addWidget(alarm_panel, 0, 1)
+        grid.addWidget(alarm_panel, 1, 1)
         
         grid.setColumnStretch(0, 1)
         grid.setColumnStretch(1, 1)
+        grid.setRowStretch(0, 1)
+        grid.setRowStretch(1, 1)
 
         main_layout.addWidget(self.main_frame)
         self.setLayout(main_layout)
@@ -458,74 +560,133 @@ class PingApp(QWidget):
         """Creates the left panel for ping monitoring."""
         panel = QFrame()
         panel.setFrameShape(QFrame.StyledPanel)
+        panel.setProperty("class", "panel")
         layout = QVBoxLayout(panel)
+        layout.setContentsMargins(15, 15, 15, 15)
+        layout.setSpacing(15)
 
         self.title_label = QLabel()
-        self.title_label.setFont(QFont("Arial", 20, QFont.Bold))
+        self.title_label.setFont(QFont("Segoe UI", 18, QFont.Bold))
         self.title_label.setAlignment(Qt.AlignCenter)
+        self.title_label.setProperty("class", "panel-title")
 
         self.connection_status = QLabel()
         self.connection_status.setObjectName("ConnectionStatus")
-        self.connection_status.setFont(QFont("Arial", 12))
+        self.connection_status.setFont(QFont("Segoe UI", 12))
+        self.connection_status.setAlignment(Qt.AlignCenter)
         
         self.target_label = QLabel()
-        self.target_label.setFont(QFont("Arial", 10))
+        self.target_label.setFont(QFont("Segoe UI", 10))
+        self.target_label.setAlignment(Qt.AlignCenter)
         
         # Ping results list
         self.ping_result_list = QListWidget()
         self.ping_result_list.setObjectName("PingResultList")
-        self.ping_result_list.setFont(QFont("Arial", 14))  # Increased font size
+        self.ping_result_list.setFont(QFont("Segoe UI", 12))
+        self.ping_result_list.setSpacing(4)
         
         layout.addWidget(self.title_label)
         layout.addWidget(self.connection_status)
         layout.addWidget(self.target_label)
         layout.addWidget(self.ping_result_list)
+        return panel
+
+    def create_graph_panel(self):
+        """Creates the panel for ping response time graph."""
+        panel = QFrame()
+        panel.setFrameShape(QFrame.StyledPanel)
+        panel.setProperty("class", "panel")
+        layout = QVBoxLayout(panel)
         layout.setContentsMargins(15, 15, 15, 15)
-        layout.setSpacing(10)
+        layout.setSpacing(15)
+
+        # Graph title
+        graph_title = QLabel("Ping Response Time (ms)" if english_language else "Ping Cavab Müddəti (ms)")
+        graph_title.setFont(QFont("Segoe UI", 14, QFont.Bold))
+        graph_title.setAlignment(Qt.AlignCenter)
+        graph_title.setProperty("class", "panel-title")
+        layout.addWidget(graph_title)
+
+        # Create pyqtgraph plot widget
+        self.graphWidget = pg.PlotWidget()
+        self.graphWidget.setBackground(COLORS['dark']['tertiary'] if dark_mode else COLORS['light']['tertiary'])
+        
+        # Set up the plot
+        self.plot = self.graphWidget.plot(pen=pg.mkPen(color=COLORS['dark']['accent_blue'] if dark_mode else COLORS['light']['accent_blue'], width=2))
+        self.graphWidget.setLabel('left', "Response Time (ms)")
+        self.graphWidget.setLabel('bottom', "Time")
+        self.graphWidget.showGrid(x=True, y=True)
+        self.graphWidget.setYRange(0, 100)  # Initial Y range (0-100ms)
+        
+        layout.addWidget(self.graphWidget)
         return panel
 
     def create_alarm_panel(self):
         """Creates the right panel for clock and alarms."""
         panel = QFrame()
         panel.setFrameShape(QFrame.StyledPanel)
+        panel.setProperty("class", "panel")
         layout = QVBoxLayout(panel)
+        layout.setContentsMargins(15, 15, 15, 15)
+        layout.setSpacing(15)
 
         # Clock
         self.clock_title = QLabel()
-        self.clock_title.setFont(QFont("Arial", 20, QFont.Bold))
+        self.clock_title.setFont(QFont("Segoe UI", 18, QFont.Bold))
         self.clock_title.setAlignment(Qt.AlignCenter)
+        self.clock_title.setProperty("class", "panel-title")
+        
         self.current_time_label = QLabel()
         self.current_time_label.setObjectName("CurrentTimeLabel")
-        # Increase clock font size for larger window
         self.current_time_label.setFont(QFont("Segoe UI", 48, QFont.Bold)) 
         self.current_time_label.setAlignment(Qt.AlignCenter)
+        
+        # Add glow effect to clock
+        glow = QGraphicsDropShadowEffect()
+        glow.setBlurRadius(20)
+        glow.setColor(QColor(COLORS['dark']['accent_blue'] if dark_mode else COLORS['light']['accent_blue']))
+        glow.setOffset(0, 0)
+        self.current_time_label.setGraphicsEffect(glow)
 
         # Alarm Status
         self.alarm_status = QLabel()
         self.alarm_status.setObjectName("AlarmStatus")
-        self.alarm_status.setFont(QFont("Arial", 14, QFont.Bold))
+        self.alarm_status.setFont(QFont("Segoe UI", 14, QFont.Bold))
         self.alarm_status.setAlignment(Qt.AlignCenter)
+        
         self.stop_alarm_btn = QPushButton()
         self.stop_alarm_btn.clicked.connect(self.stop_alarm_sound)
         self.stop_alarm_btn.setVisible(False)
+        self.stop_alarm_btn.setProperty("class", "stop-alarm-btn")
 
         # Alarm Management
         self.daily_alarms_title = QLabel()
-        self.daily_alarms_title.setFont(QFont("Arial", 16, QFont.Bold))
+        self.daily_alarms_title.setFont(QFont("Segoe UI", 16, QFont.Bold))
+        self.daily_alarms_title.setAlignment(Qt.AlignCenter)
+        self.daily_alarms_title.setProperty("class", "panel-title")
+        
         self.managed_alarms_list = QListWidget()
-        self.managed_alarms_list.setSelectionMode(QListWidget.ExtendedSelection) # Allow multi-select 
-        # Connect item click to toggle alarm enabled status
+        self.managed_alarms_list.setSelectionMode(QListWidget.ExtendedSelection)
+        self.managed_alarms_list.setFont(QFont("Segoe UI", 12))
+        self.managed_alarms_list.setSpacing(4)
         self.managed_alarms_list.itemClicked.connect(self.toggle_alarm_enabled)
-
 
         # Management Buttons
         alarm_btn_layout = QHBoxLayout()
+        alarm_btn_layout.setSpacing(10)
+        
         self.add_new_alarm_btn = QPushButton()
         self.add_new_alarm_btn.clicked.connect(self.add_new_alarm)
+        self.add_new_alarm_btn.setProperty("class", "action-btn")
+        
         self.delete_selected_alarm_btn = QPushButton()
         self.delete_selected_alarm_btn.clicked.connect(self.delete_selected_alarm)
+        self.delete_selected_alarm_btn.setProperty("class", "action-btn danger")
+        
         self.save_managed_alarms_btn = QPushButton()
         self.save_managed_alarms_btn.clicked.connect(self.save_alarms_data)
+        self.save_managed_alarms_btn.setProperty("class", "action-btn success")
+        
         alarm_btn_layout.addWidget(self.add_new_alarm_btn)
         alarm_btn_layout.addWidget(self.delete_selected_alarm_btn)
         alarm_btn_layout.addWidget(self.save_managed_alarms_btn)
@@ -534,12 +695,10 @@ class PingApp(QWidget):
         layout.addWidget(self.current_time_label)
         layout.addWidget(self.alarm_status)
         layout.addWidget(self.stop_alarm_btn)
-        layout.addSpacing(20)
+        layout.addSpacing(10)
         layout.addWidget(self.daily_alarms_title)
         layout.addWidget(self.managed_alarms_list)
         layout.addLayout(alarm_btn_layout)
-        layout.setContentsMargins(15, 15, 15, 15)
-        layout.setSpacing(10)
 
         return panel
 
@@ -554,12 +713,41 @@ class PingApp(QWidget):
         # Ping thread signals
         self.ping_thread.update_signal.connect(self.update_ping_display)
         self.ping_thread.status_signal.connect(self.update_connection_status)
+        self.ping_thread.ping_result_signal.connect(self.update_ping_graph)
         self.ping_thread.start()
 
         # Alarm thread signals
         self.alarm_thread.alarm_signal.connect(self.on_alarm_ring)
         self.alarm_thread.start()
         
+    def update_ping_graph(self, response_time):
+        """Updates the ping response time graph with new data."""
+        now = time.time()
+        
+        # Add new data point
+        self.ping_data.append(response_time)
+        self.time_data.append(now)
+        
+        # Keep only the most recent data points
+        if len(self.ping_data) > self.max_data_points:
+            self.ping_data = self.ping_data[-self.max_data_points:]
+            self.time_data = self.time_data[-self.max_data_points:]
+        
+        # Convert timestamps to relative seconds for x-axis
+        if len(self.time_data) > 0:
+            relative_times = [t - self.time_data[0] for t in self.time_data]
+            
+            # Update the plot
+            self.plot.setData(relative_times, self.ping_data)
+            
+            # Auto-scale Y axis with some padding
+            min_y = max(0, min(self.ping_data) - 5)
+            max_y = max(self.ping_data) + 5
+            self.graphWidget.setYRange(min_y, max_y)
+            
+            # Set X axis range to show last minute
+            self.graphWidget.setXRange(0, max(60, relative_times[-1] + 5))
+
     def create_tray_icon(self):
         """Sets up the system tray icon and its menu."""
         self.tray_icon = QSystemTrayIcon(QIcon('icon.png'), self)
@@ -590,10 +778,10 @@ class PingApp(QWidget):
                                      QMessageBox.Yes | QMessageBox.Cancel, 
                                      QMessageBox.Yes)
         
-        if reply == QMessageBox.Yes: # Minimize 
+        if reply == QMessageBox.Yes:
             self.shutdown()
             event.accept()
-        else: # Cancel
+        else:
             event.ignore()
 
     def shutdown(self):
@@ -652,7 +840,7 @@ class PingApp(QWidget):
                 self.managed_alarms.append(Alarm(11, 0, True, "Lunch Reminder"))
                 self.managed_alarms.append(Alarm(14, 0, True, "Afternoon Break"))
                 self.managed_alarms.append(Alarm(17, 0, True, "End of Day"))
-                self.save_alarms_data() # Save these new default alarms
+                self.save_alarms_data()
         except Exception as e:
             QMessageBox.warning(self, "Alarm Load Error", f"Failed to load alarms: {e}")
 
@@ -695,6 +883,7 @@ class PingApp(QWidget):
         self.ping_thread = PingThread(self.sound_manager)
         self.ping_thread.update_signal.connect(self.update_ping_display)
         self.ping_thread.status_signal.connect(self.update_connection_status)
+        self.ping_thread.ping_result_signal.connect(self.update_ping_graph)
         self.ping_thread.start()
         self.save_config()
 
@@ -724,51 +913,165 @@ class PingApp(QWidget):
         self.update_alarm_list_ui()
 
     def apply_theme(self):
-        """Applies the selected light or dark theme."""
-        light_style = """
-            QWidget { background-color: #f0f0f0; color: black; }
-            QFrame { background-color: #ffffff; border-radius: 8px; }
-            QLabel { color: black; background-color: transparent; }
-            QLabel#ConnectionStatus[class="status-good"] { color: #008800; }
-            QLabel#ConnectionStatus[class="status-error"] { color: #D32F2F; }
-            QLabel#AlarmStatus[ringing="true"] { color: #D32F2F; }
-            QListWidget { background-color: #f8f8f8; border: 1px solid #ccc; }
-            QListWidget::item:selected { background-color: #a8d8ff; color: black; }
-            QPushButton { background-color: #e0e0e0; border: 1px solid #ccc; border-radius: 4px; padding: 5px; }
-            QPushButton:hover { background-color: #d0d0d0; }
-            QMenuBar { background-color: #e0e0e0; }
-            QMenuBar::item:selected { background-color: #c0c0c0; }
-            QMenu { background-color: #f0f0f0; border: 1px solid #ccc; }
-            QMenu::item:selected { background-color: #a8d8ff; }
-            QListWidget {
-            font-size: 12px;  # Or whatever size you prefer
-            alternate-background-color: #3a3a3a;  # For dark mode
-            alternate-background-color: #f5f5f5;  # For light mode}
+        """Applies the selected light or dark theme with modern styling."""
+        colors = COLORS['dark'] if dark_mode else COLORS['light']
+        
+        style = f"""
+            /* Main window styling */
+            QWidget {{
+                background-color: {colors['primary']};
+                color: {colors['text_primary']};
+                font-family: 'Segoe UI', Arial, sans-serif;
+            }}
+            
+            /* Panel styling */
+            .panel {{
+                background-color: {colors['secondary']};
+                border-radius: 12px;
+                border: 1px solid {colors['border']};
+            }}
+            
+            .panel-title {{
+                color: {colors['accent_blue']};
+                margin-bottom: 10px;
+            }}
+            
+            /* List widgets */
+            QListWidget {{
+                background-color: {colors['tertiary']};
+                border: 1px solid {colors['border']};
+                border-radius: 8px;
+                padding: 5px;
+                outline: 0;
+            }}
+            
+            QListWidget::item {{
+                padding: 8px;
+                border-radius: 4px;
+            }}
+            
+            QListWidget::item:hover {{
+                background-color: {colors['hover']};
+            }}
+            
+            QListWidget::item:selected {{
+                background-color: {colors['accent_blue']};
+                color: white;
+            }}
+            
+            /* Ping result list specific */
+            #PingResultList::item[success="true"] {{
+                background-color: {colors['success_bg']};
+                color: {colors['accent_green']};
+            }}
+            
+            #PingResultList::item[success="false"] {{
+                background-color: {colors['error_bg']};
+                color: {colors['accent_red']};
+            }}
+            
+            /* Connection status labels */
+            #ConnectionStatus.status-good {{
+                color: {colors['accent_green']};
+            }}
+            
+            #ConnectionStatus.status-error {{
+                color: {colors['accent_red']};
+                font-weight: bold;
+            }}
+            
+            /* Alarm status */
+            #AlarmStatus[ringing="true"] {{
+                color: {colors['accent_red']};
+                font-weight: bold;
+                animation: pulse 1s infinite;
+            }}
+            
+            /* Buttons */
+            .action-btn {{
+                background-color: {colors['tertiary']};
+                border: 1px solid {colors['border']};
+                border-radius: 6px;
+                padding: 8px 16px;
+                color: {colors['text_primary']};
+                min-height: 36px;
+            }}
+            
+            .action-btn:hover {{
+                background-color: {colors['hover']};
+            }}
+            
+            .action-btn:pressed {{
+                background-color: {colors['active']};
+            }}
+            
+            .action-btn.success {{
+                background-color: {colors['accent_green']};
+                color: white;
+            }}
+            
+            .action-btn.danger {{
+                background-color: {colors['accent_red']};
+                color: white;
+            }}
+            
+            .stop-alarm-btn {{
+                background-color: {colors['accent_red']};
+                color: white;
+                font-weight: bold;
+                border-radius: 6px;
+                padding: 10px;
+                border: none;
+            }}
+            
+            .stop-alarm-btn:hover {{
+                background-color: {colors['accent_red']};
+                opacity: 0.9;
+            }}
+            
+            /* Menu bar */
+            QMenuBar {{
+                background-color: {colors['secondary']};
+                padding: 5px;
+                border-bottom: 1px solid {colors['border']};
+            }}
+            
+            QMenuBar::item {{
+                padding: 5px 10px;
+                background-color: transparent;
+                border-radius: 4px;
+            }}
+            
+            QMenuBar::item:selected {{
+                background-color: {colors['hover']};
+            }}
+            
+            QMenuBar::item:pressed {{
+                background-color: {colors['active']};
+            }}
+            
+            /* Animations */
+            @keyframes pulse {{
+                0% {{ opacity: 1.0; }}
+                50% {{ opacity: 0.5; }}
+                100% {{ opacity: 1.0; }}
+            }}
         """
-        dark_style = """
-            QWidget { background-color: #2b2b2b; color: #e0e0e0; }
-            QFrame { background-color: #3c3c3c; border-radius: 8px; }
-            QLabel { color: #e0e0e0; background-color: transparent; }
-            QLabel#ConnectionStatus[class="status-good"] { color: #4CAF50; }
-            QLabel#ConnectionStatus[class="status-error"] { color: #FF6347; }
-            QLabel#AlarmStatus[ringing="true"] { color: #FF6347; }
-            QListWidget { background-color: #3a3a3a; border: 1px solid #555; color: #e0e0e0; }
-            QListWidget::item { color: #e0e0e0; }
-            QListWidget::item:selected { background-color: #5e5e5e; color: #ffffff; }
-            QListWidget::item:selected:!active { background-color: #5e5e5e; }
-            QListWidget::item:selected:active { background-color: #5e5e5e; }
-            QPushButton { background-color: #505050; border: 1px solid #666; border-radius: 4px; padding: 5px; color: #e0e0e0; }
-            QPushButton:hover { background-color: #606060; }
-            QMenuBar { background-color: #3c3c3c; color: #e0e0e0; }
-            QMenuBar::item:selected { background-color: #505050; }
-            QMenu { background-color: #3c3c3c; border: 1px solid #555; }
-            QMenu::item { color: #e0e0e0; }
-            QMenu::item:selected { background-color: #505050; }
-        """
-        self.setStyleSheet(dark_style if dark_mode else light_style)
-        # Apply style to menubar explicitly, as it might not inherit from QWidget
+        self.setStyleSheet(style)
+        
+        # Apply style to menubar explicitly
         if self.layout() and self.layout().menuBar():
-            self.layout().menuBar().setStyleSheet("QMenuBar { background-color: #3c3c3c; color: #e0e0e0; }" if dark_mode else "QMenuBar { background-color: #e0e0e0; color: black; }")
+            self.layout().menuBar().setStyleSheet(f"""
+                QMenuBar {{
+                    background-color: {colors['secondary']};
+                    color: {colors['text_primary']};
+                }}
+            """)
+
+        # Update graph colors based on theme
+        if hasattr(self, 'graphWidget'):
+            self.graphWidget.setBackground(colors['tertiary'])
+            self.plot.setPen(pg.mkPen(color=colors['accent_blue'], width=2))
 
     def update_clock(self):
         """Updates the current time display."""
@@ -776,20 +1079,31 @@ class PingApp(QWidget):
         self.current_time_label.setText(current_time)
 
     def update_ping_display(self, message, is_success):
-        """Adds a new ping result to the list."""
+        """Adds a new ping result to the list with animation."""
         item = QListWidgetItem(message)
-        if not is_success:
-            item.setForeground(QColor("red") if dark_mode else QColor("darkred"))
+        item.setData(Qt.UserRole + 1, "true" if is_success else "false")  # Store success state
+        
+        if is_success:
+            item.setForeground(QColor(COLORS['dark']['accent_green'] if dark_mode else COLORS['light']['accent_green']))
         else:
-            item.setForeground(QColor("green") if dark_mode else QColor("darkgreen"))
+            item.setForeground(QColor(COLORS['dark']['accent_red'] if dark_mode else COLORS['light']['accent_red']))
+            
         self.ping_result_list.addItem(item)
         self.ping_result_list.scrollToBottom()
+        
+        # Add animation for new items
+        animation = QPropertyAnimation(self.ping_result_list.itemWidget(item), b"opacity" if self.ping_result_list.itemWidget(item) else b"")
+        animation.setDuration(300)
+        animation.setStartValue(0)
+        animation.setEndValue(1)
+        animation.setEasingCurve(QEasingCurve.OutQuad)
+        animation.start()
 
     def update_connection_status(self, message, css_class):
         """Updates the connection status label."""
         self.connection_status.setText(message)
         self.connection_status.setProperty("class", css_class)
-        self.style().polish(self.connection_status) # Reapply stylesheet to update class
+        self.style().polish(self.connection_status)
 
     def on_alarm_ring(self, message):
         """Handles an alarm ringing event."""
@@ -798,7 +1112,17 @@ class PingApp(QWidget):
         self.alarm_status.setProperty("ringing", "true")
         self.style().polish(self.alarm_status)
         self.stop_alarm_btn.setVisible(True)
-        # Bring app to front if minimized when alarm rings
+        
+        # Add pulse animation to alarm status
+        animation = QPropertyAnimation(self.alarm_status, b"opacity")
+        animation.setDuration(1000)
+        animation.setStartValue(1.0)
+        animation.setEndValue(0.5)
+        animation.setEasingCurve(QEasingCurve.InOutQuad)
+        animation.setLoopCount(-1)  # Infinite loop
+        animation.start()
+        
+        # Bring app to front when alarm rings
         if self.isMinimized():
             self.showNormal()
         self.activateWindow()
@@ -813,16 +1137,26 @@ class PingApp(QWidget):
         self.alarm_status.setProperty("ringing", "false")
         self.style().polish(self.alarm_status)
         self.stop_alarm_btn.setVisible(False)
+        
+        # Stop any animations
+        for anim in self.alarm_status.findChildren(QPropertyAnimation):
+            anim.stop()
 
     def update_alarm_list_ui(self):
         """Refreshes the displayed list of managed alarms."""
         self.managed_alarms_list.clear()
         for alarm in self.managed_alarms:
             item = QListWidgetItem(str(alarm))
-            item.setFlags(item.flags() | Qt.ItemIsUserCheckable) # Make it checkable
+            item.setFlags(item.flags() | Qt.ItemIsUserCheckable)
             item.setCheckState(Qt.Checked if alarm.enabled else Qt.Unchecked)
-            # Store the actual Alarm object in the QListWidgetItem for easy retrieval
-            item.setData(Qt.UserRole, alarm) 
+            item.setData(Qt.UserRole, alarm)
+            
+            # Set different background for enabled/disabled alarms
+            if alarm.enabled:
+                item.setBackground(QColor(COLORS['dark']['success_bg'] if dark_mode else COLORS['light']['success_bg']))
+            else:
+                item.setBackground(QColor(COLORS['dark']['tertiary'] if dark_mode else COLORS['light']['tertiary']))
+                
             self.managed_alarms_list.addItem(item)
         self.reschedule_all_alarms()
 
@@ -838,7 +1172,7 @@ class PingApp(QWidget):
         time_layout = QVBoxLayout(time_dialog)
         time_edit = QTimeEdit(QTime.currentTime())
         time_edit.setDisplayFormat("HH:mm")
-        time_edit.setFont(QFont("Arial", 24))
+        time_edit.setFont(QFont("Segoe UI", 24))
         ok_button = QPushButton("OK")
         ok_button.clicked.connect(time_dialog.accept)
         time_layout.addWidget(QLabel("Select time:" if english_language else "Vaxtı seçin:"))
@@ -849,7 +1183,6 @@ class PingApp(QWidget):
             selected_time = time_edit.time()
             new_alarm = Alarm(selected_time.hour(), selected_time.minute(), True, text)
             
-            # Avoid adding duplicate alarms (by time and name)
             if new_alarm not in self.managed_alarms:
                 self.managed_alarms.append(new_alarm)
                 self.update_alarm_list_ui()
@@ -870,23 +1203,24 @@ class PingApp(QWidget):
                                      QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
 
         if reply == QMessageBox.Yes:
-            # Create a list of alarms to remove from managed_alarms
             alarms_to_remove = [item.data(Qt.UserRole) for item in selected_items]
-            
-            # Remove from managed_alarms list
             self.managed_alarms = [alarm for alarm in self.managed_alarms if alarm not in alarms_to_remove]
-            
-            self.update_alarm_list_ui() # Refresh the UI
+            self.update_alarm_list_ui()
             self.save_alarms_data()
-            
 
     def toggle_alarm_enabled(self, item):
         """Toggles the enabled status of an alarm when its checkbox is clicked."""
         alarm = item.data(Qt.UserRole)
         if alarm:
             alarm.enabled = item.checkState() == Qt.Checked
-            # Update the display text to reflect the enabled/disabled state
-            item.setText(str(alarm)) 
+            item.setText(str(alarm))
+            
+            # Update background color based on new state
+            if alarm.enabled:
+                item.setBackground(QColor(COLORS['dark']['success_bg'] if dark_mode else COLORS['light']['success_bg']))
+            else:
+                item.setBackground(QColor(COLORS['dark']['tertiary'] if dark_mode else COLORS['light']['tertiary']))
+                
             self.save_alarms_data()
             self.reschedule_all_alarms()
 
@@ -897,19 +1231,12 @@ class PingApp(QWidget):
         now = datetime.now()
         for alarm in self.managed_alarms:
             if alarm.enabled:
-                # Set alarm for today
                 alarm_dt_today = now.replace(hour=alarm.hour, minute=alarm.minute, second=0, microsecond=0)
-                
-                # If the alarm time has already passed for today, schedule it for tomorrow
                 if alarm_dt_today <= now:
                     alarm_dt_today += timedelta(days=1)
-                
                 active_alarm_timestamps.append(alarm_dt_today.timestamp())
         
-        # Sort timestamps to process them in order
         active_alarm_timestamps.sort()
-        print(f"Rescheduled alarms. Next alarms: {[datetime.fromtimestamp(ts).strftime('%H:%M') for ts in active_alarm_timestamps]}")
-
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)
@@ -928,9 +1255,6 @@ if __name__ == "__main__":
     for sound_file in [ERROR_SOUND_FILE, ALARM_SOUND_FILE]:
         if not os.path.exists(sound_file):
             print(f"Warning: {sound_file} not found. Sound alerts might not work as expected.")
-            # Optional: create a silent dummy file or inform the user
-            # You might want to create a simple silent .wav or just rely on the 'winsound.SND_ALIAS' fallback
-            # For simplicity, we'll just print a warning for now.
 
     ex = PingApp()
     ex.show()
