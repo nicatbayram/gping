@@ -3,7 +3,7 @@
     "ping_timeout": 1,
     "ping_interval": 1,
     "dark_mode": true,
-    "english_language": false,
+    "english_language": true,
     "error_sound_file": "error.wav",
     "alarm_sound_file": "alarm.wav",
     "managed_alarms": [
