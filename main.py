@@ -10,6 +10,7 @@ import subprocess
 import socket
 import pytz
 from geopy.geocoders import Nominatim
+import requests
 
 # PyQt5 imports
 from PyQt5.QtWidgets import (
@@ -43,8 +44,102 @@ PING_INTERVAL = 1
 ERROR_SOUND_FILE = "error.wav"
 ALARM_SOUND_FILE = "alarm.wav"
 dark_mode = True
-english_language = False
+english_language = True  # Default to English
 CONFIG_FILE = "config.json"
+
+# --- Text Resources ---
+TEXTS = {
+    "en": {
+        "main_title": "🚀 DNS Ping & Alarm Monitor",
+        "settings_title": "Settings",
+        "dns_server": "DNS/IP Server:",
+        "ping_interval": "Ping Interval (s):",
+        "ping_timeout": "Ping Timeout (s):",
+        "language": "Language:",
+        "theme": "Theme:",
+        "error_sound": "Error Sound:",
+        "alarm_sound": "Alarm Sound:",
+        "save": "Save",
+        "browse": "Browse...",
+        "ping_graph_title": "Ping Response Time (ms)",
+        "ping_monitor_title": "DNS Ping Monitor",
+        "searching": "Searching...",
+        "internet_good": "✓ Internet: Good",
+        "internet_poor": "✗ Internet: Poor",
+        "alarm_management": "ALARM MANAGEMENT",
+        "alarm_ringing": "🚨 Alarm is ringing!",
+        "stop_alarm": "🚨 STOP ALARM",
+        "add_new": "Add New",
+        "delete_selected": "Delete Selected",
+        "save_alarms": "Save Alarms",
+        "no_selection": "Please select at least one alarm to delete.",
+        "confirm_delete": "Are you sure you want to delete {} selected alarm(s)?",
+        "duplicate_alarm": "An alarm with this time and name already exists.",
+        "quit_title": "Quit?",
+        "quit_message": "Quit the application?",
+        "alarm_load_error": "Alarm Load Error",
+        "alarm_save_error": "Alarm Save Error",
+        "new_alarm_title": "New Alarm Name",
+        "new_alarm_prompt": "Enter alarm name:",
+        "set_time_title": "Set Alarm Time",
+        "select_time": "Select time:",
+        "ok": "OK",
+        "local_ip": "Local IP:",
+        "public_ip": "Public IP:",
+        "ip_not_available": "Not available",
+        "menu_settings": "&Settings",
+        "menu_open_settings": "Open Settings",
+        "menu_exit": "Exit",
+        "tray_show": "Show",
+        "tray_quit": "Quit",
+        "default_alarms": ["Morning Alarm", "Lunch Reminder", "Afternoon Break", "End of Day"]
+    },
+    "az": {
+        "main_title": "🚀 DNS Ping & Alarm Monitor (AZ)",
+        "settings_title": "Parametrlər",
+        "dns_server": "DNS/IP Server:",
+        "ping_interval": "Ping intervalı (s):",
+        "ping_timeout": "Ping zaman aşımı (s):",
+        "language": "Dil:",
+        "theme": "Mövzu:",
+        "error_sound": "Səhv səsi:",
+        "alarm_sound": "Siqnal səsi:",
+        "save": "Yadda saxla",
+        "browse": "Seç...",
+        "ping_graph_title": "Ping cavab müddəti (ms)",
+        "ping_monitor_title": "DNS Ping Monitor",
+        "searching": "Axtarılır...",
+        "internet_good": "✓ İnternet: Yaxşı",
+        "internet_poor": "✗ İnternet: Zəif",
+        "alarm_management": "SİQNAL İDARƏETMƏ",
+        "alarm_ringing": "🚨 Siqnal çalır!",
+        "stop_alarm": "🚨 SİQNALI DAYANDIR",
+        "add_new": "Yeni əlavə et",
+        "delete_selected": "Seçilmişi sil",
+        "save_alarms": "Siqnalları yadda saxla",
+        "no_selection": "Silinməsi üçün ən azı bir siqnal seçin.",
+        "confirm_delete": "Seçilmiş {} siqnalı silmək istədiyinizə əminsiniz?",
+        "duplicate_alarm": "Bu vaxt və adla siqnal artıq mövcuddur.",
+        "quit_title": "Çıxış?",
+        "quit_message": "Proqramdan çıxmaq istəyirsiniz?",
+        "alarm_load_error": "Siqnal Yükləmə Xətası",
+        "alarm_save_error": "Siqnal Saxlama Xətası",
+        "new_alarm_title": "Yeni Siqnal Adı",
+        "new_alarm_prompt": "Siqnal adını daxil edin:",
+        "set_time_title": "Siqnal Vaxtını Təyin Et",
+        "select_time": "Vaxtı seçin:",
+        "ok": "TAMAM",
+        "local_ip": "Lokal IP:",
+        "public_ip": "Ümumi IP:",
+        "ip_not_available": "Mövcud deyil",
+        "menu_settings": "&Parametrlər",
+        "menu_open_settings": "Parametrləri aç",
+        "menu_exit": "Çıxış",
+        "tray_show": "Göstər",
+        "tray_quit": "Çıx",
+        "default_alarms": ["Səhər siqnalı", "Nahar xatırlatması", "Günortadan sonra fasilə", "Günün sonu"]
+    }
+}
 
 # Store active alarms (timestamps)
 active_alarm_timestamps = []
@@ -239,7 +334,7 @@ class PingThread(QThread):
                 self.consecutive_errors = 0
                 self.last_success_time = time.time()
                 msg = f"[{now_str}] 🟢 Successful → {response:.1f} ms"
-                status_msg = "✓ Internet: Good"
+                status_msg = TEXTS["en" if english_language else "az"]["internet_good"]
                 self.status_signal.emit(status_msg, "status-good")
                 self.update_signal.emit(msg, True)
                 self.ping_result_signal.emit(response)
@@ -249,7 +344,7 @@ class PingThread(QThread):
                 msg = f"[{now_str}] 🔴 Failed → Timeout ({elapsed:.1f}s)"
                 self.update_signal.emit(msg, False)
                 if self.consecutive_errors >= self.max_errors_before_sound:
-                    status_msg = "✗ Internet: Poor"
+                    status_msg = TEXTS["en" if english_language else "az"]["internet_poor"]
                     self.status_signal.emit(status_msg, "status-error")
                     self.sound_manager.play("error")
 
@@ -288,7 +383,7 @@ class AlarmThread(QThread):
                     
                     active_alarm_ringing = True
                     self.triggered_today.add((alarm_time.hour, alarm_time.minute))
-                    alarm_msg = "🚨 Alarm is ringing!"
+                    alarm_msg = TEXTS["en" if english_language else "az"]["alarm_ringing"]
                     self.alarm_signal.emit(alarm_msg)
                     self.sound_manager.play("alarm")
             time.sleep(1)
@@ -301,10 +396,11 @@ class AlarmThread(QThread):
 class SettingsDialog(QDialog):
     """Dialog for application settings"""
     settings_changed = pyqtSignal()
+    language_changed = pyqtSignal(str)  # New signal for language change
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setWindowTitle("Settings")
+        self.setWindowTitle(TEXTS["en" if english_language else "az"]["settings_title"])
         self.setWindowIcon(QIcon('icon.png'))
         self.setGeometry(500, 400, 650, 550)
         self.init_ui()
@@ -318,21 +414,21 @@ class SettingsDialog(QDialog):
         # DNS Server
         self.dns_input = QLineEdit(DNS_SERVER)
         self.dns_input.setProperty("class", "input-field")
-        layout.addRow(QLabel("DNS/IP Server:"), self.dns_input)
+        layout.addRow(QLabel(TEXTS["en" if english_language else "az"]["dns_server"]), self.dns_input)
 
         # Ping Interval
         self.ping_interval_spin = QSpinBox()
         self.ping_interval_spin.setRange(1, 60)
         self.ping_interval_spin.setValue(PING_INTERVAL)
         self.ping_interval_spin.setProperty("class", "input-field")
-        layout.addRow(QLabel("Ping Interval (s):"), self.ping_interval_spin)
+        layout.addRow(QLabel(TEXTS["en" if english_language else "az"]["ping_interval"]), self.ping_interval_spin)
 
         # Ping Timeout
         self.ping_timeout_spin = QSpinBox()
         self.ping_timeout_spin.setRange(1, 10)
         self.ping_timeout_spin.setValue(PING_TIMEOUT)
         self.ping_timeout_spin.setProperty("class", "input-field")
-        layout.addRow(QLabel("Ping Timeout (s):"), self.ping_timeout_spin)
+        layout.addRow(QLabel(TEXTS["en" if english_language else "az"]["ping_timeout"]), self.ping_timeout_spin)
         
         # Language
         self.language_combo = QComboBox()
@@ -340,7 +436,7 @@ class SettingsDialog(QDialog):
         self.language_combo.addItem("Azərbaycanca", False)
         self.language_combo.setCurrentIndex(0 if english_language else 1)
         self.language_combo.setProperty("class", "input-field")
-        layout.addRow(QLabel("Language:"), self.language_combo)
+        layout.addRow(QLabel(TEXTS["en" if english_language else "az"]["language"]), self.language_combo)
 
         # Theme
         self.theme_combo = QComboBox()
@@ -348,29 +444,29 @@ class SettingsDialog(QDialog):
         self.theme_combo.addItem("Dark", True)
         self.theme_combo.setCurrentIndex(1 if dark_mode else 0)
         self.theme_combo.setProperty("class", "input-field")
-        layout.addRow(QLabel("Theme:"), self.theme_combo)
+        layout.addRow(QLabel(TEXTS["en" if english_language else "az"]["theme"]), self.theme_combo)
 
         # Sound files
         self.error_sound_label = QLabel(os.path.basename(ERROR_SOUND_FILE))
-        change_error_sound_btn = QPushButton("Browse...")
+        change_error_sound_btn = QPushButton(TEXTS["en" if english_language else "az"]["browse"])
         change_error_sound_btn.setProperty("class", "browse-btn")
         change_error_sound_btn.clicked.connect(self._select_error_sound)
         error_sound_layout = QHBoxLayout()
         error_sound_layout.addWidget(self.error_sound_label)
         error_sound_layout.addWidget(change_error_sound_btn)
-        layout.addRow(QLabel("Error Sound:"), error_sound_layout)
+        layout.addRow(QLabel(TEXTS["en" if english_language else "az"]["error_sound"]), error_sound_layout)
 
         self.alarm_sound_label = QLabel(os.path.basename(ALARM_SOUND_FILE))
-        change_alarm_sound_btn = QPushButton("Browse...")
+        change_alarm_sound_btn = QPushButton(TEXTS["en" if english_language else "az"]["browse"])
         change_alarm_sound_btn.setProperty("class", "browse-btn")
         change_alarm_sound_btn.clicked.connect(self._select_alarm_sound)
         alarm_sound_layout = QHBoxLayout()
         alarm_sound_layout.addWidget(self.alarm_sound_label)
         alarm_sound_layout.addWidget(change_alarm_sound_btn)
-        layout.addRow(QLabel("Alarm Sound:"), alarm_sound_layout)
+        layout.addRow(QLabel(TEXTS["en" if english_language else "az"]["alarm_sound"]), alarm_sound_layout)
         
         # Save button
-        save_button = QPushButton("Save")
+        save_button = QPushButton(TEXTS["en" if english_language else "az"]["save"])
         save_button.setProperty("class", "save-btn")
         save_button.clicked.connect(self.save_settings)
         layout.addRow(save_button)
@@ -469,9 +565,15 @@ class SettingsDialog(QDialog):
         DNS_SERVER = self.dns_input.text() or "8.8.8.8"
         PING_INTERVAL = self.ping_interval_spin.value()
         PING_TIMEOUT = self.ping_timeout_spin.value()
+        
+        # Check if language changed
+        lang_changed = english_language != self.language_combo.currentData()
         english_language = self.language_combo.currentData()
         dark_mode = self.theme_combo.currentData()
+        
         self.settings_changed.emit()
+        if lang_changed:
+            self.language_changed.emit("en" if english_language else "az")
         self.accept()
 
 class PingApp(QWidget):
@@ -497,10 +599,11 @@ class PingApp(QWidget):
         self.create_menu_bar()
         self.create_tray_icon()
         self.apply_theme()
+        self.update_texts()
 
     def init_ui(self):
         """Initialize main UI components"""
-        self.setWindowTitle("🚀 DNS Ping & Alarm Monitor")
+        self.setWindowTitle(TEXTS["en" if english_language else "az"]["main_title"])
         self.original_width = 1100
         self.original_height = 750
         self.setGeometry(500, 250, int(self.original_width * 1.5), int(self.original_height * 1.5))
@@ -523,10 +626,10 @@ class PingApp(QWidget):
         top_layout.setSpacing(15)
 
         ping_panel = self.create_ping_panel()
-        top_layout.addWidget(ping_panel, 1)
+        top_layout.addWidget(ping_panel, 2)
 
         graph_panel = self.create_graph_panel()
-        top_layout.addWidget(graph_panel, 1)
+        top_layout.addWidget(graph_panel, 2)
 
         grid.addWidget(top_panel, 0, 0, 1, 2)
 
@@ -575,13 +678,29 @@ class PingApp(QWidget):
         self.current_date_label.setFont(QFont("Segoe UI", 24))
         self.current_date_label.setAlignment(Qt.AlignCenter)
         
-        # Location and timezone info
-        self.location_label = QLabel()
-        self.location_label.setObjectName("LocationLabel")
-        self.location_label.setFont(QFont("Segoe UI", 30))
-        self.location_label.setAlignment(Qt.AlignCenter)
-        self.location_label.setWordWrap(True)
-
+        # IP addresses
+        ip_layout = QVBoxLayout()
+        ip_layout.setSpacing(5)
+        
+        # Local IP
+        self.local_ip_label = QLabel()
+        self.local_ip_label.setObjectName("LocalIpLabel")
+        self.local_ip_label.setFont(QFont("Segoe UI", 14))
+        self.local_ip_label.setAlignment(Qt.AlignCenter)
+        self.local_ip_label.setCursor(QCursor(Qt.PointingHandCursor))
+        self.local_ip_label.mousePressEvent = lambda e: QApplication.clipboard().setText(self.local_ip_label.text().split(": ")[1])
+        
+        # Public IP
+        self.public_ip_label = QLabel()
+        self.public_ip_label.setObjectName("PublicIpLabel")
+        self.public_ip_label.setFont(QFont("Segoe UI", 14))
+        self.public_ip_label.setAlignment(Qt.AlignCenter)
+        self.public_ip_label.setCursor(QCursor(Qt.PointingHandCursor))
+        self.public_ip_label.mousePressEvent = lambda e: QApplication.clipboard().setText(self.public_ip_label.text().split(": ")[1])
+        
+        ip_layout.addWidget(self.local_ip_label)
+        ip_layout.addWidget(self.public_ip_label)
+        
         # Glow effect for clock
         glow = QGraphicsDropShadowEffect()
         glow.setBlurRadius(20)
@@ -591,36 +710,32 @@ class PingApp(QWidget):
 
         layout.addWidget(self.current_time_label)
         layout.addWidget(self.current_date_label)
-        layout.addWidget(self.location_label)
+        layout.addLayout(ip_layout)
         
-        # Initialize location info
-        self.update_location_info()
+        # Initialize IP info
+        self.update_ip_info()
         
         return panel
 
-    def update_location_info(self):
-        """Update location and timezone information"""
+    def update_ip_info(self):
+        """Update IP address information"""
         try:
-            # Get host IP address
+            # Get local IP
             hostname = socket.gethostname()
-            ip_address = socket.gethostbyname(hostname)
+            local_ip = socket.gethostbyname(hostname)
+            self.local_ip_label.setText(f"{TEXTS['en' if english_language else 'az']['local_ip']} {local_ip}")
             
-            # Get timezone (using Turkey as default)
-            timezone = pytz.timezone(pytz.country_timezones['az'][0])
-            current_time = datetime.now(timezone)
-            timezone_name = current_time.strftime('%Z')  # Timezone abbreviation
-            
-            # Format date string (e.g., "25 July 2023, Tuesday")
-            date_str = current_time.strftime('%d %B %Y, %A')
-            self.current_date_label.setText(date_str)
-            
-            # Format location info with larger IP font
-            location_text = f"<span style='font-size: 30px;'>{ip_address}</span> | {timezone_name} (UTC{current_time.strftime('%z')})"
-            self.location_label.setText(location_text)
-            
+            # Get public IP (with timeout to prevent blocking)
+            try:
+                public_ip = requests.get('https://api.ipify.org', timeout=3).text
+                self.public_ip_label.setText(f"{TEXTS['en' if english_language else 'az']['public_ip']} {public_ip}")
+            except:
+                self.public_ip_label.setText(f"{TEXTS['en' if english_language else 'az']['public_ip']} {TEXTS['en' if english_language else 'az']['ip_not_available']}")
+                
         except Exception as e:
-            print(f"Location info error: {e}")
-            self.location_label.setText("Location information unavailable")
+            print(f"IP info error: {e}")
+            self.local_ip_label.setText(f"{TEXTS['en' if english_language else 'az']['local_ip']} {TEXTS['en' if english_language else 'az']['ip_not_available']}")
+            self.public_ip_label.setText(f"{TEXTS['en' if english_language else 'az']['public_ip']} {TEXTS['en' if english_language else 'az']['ip_not_available']}")
 
     def create_graph_panel(self):
         """Create ping response time graph panel"""
@@ -631,7 +746,7 @@ class PingApp(QWidget):
         layout.setContentsMargins(15, 15, 15, 15)
         layout.setSpacing(15)
 
-        graph_title = QLabel("Ping Response Time (ms)")
+        graph_title = QLabel(TEXTS["en" if english_language else "az"]["ping_graph_title"])
         graph_title.setFont(QFont("Segoe UI", 14, QFont.Bold))
         graph_title.setAlignment(Qt.AlignCenter)
         graph_title.setProperty("class", "panel-title")
@@ -657,28 +772,23 @@ class PingApp(QWidget):
         layout.setContentsMargins(15, 15, 15, 15)
         layout.setSpacing(15)
 
-        self.title_label = QLabel("DNS Ping Monitor")
+        self.title_label = QLabel(TEXTS["en" if english_language else "az"]["ping_monitor_title"])
         self.title_label.setFont(QFont("Segoe UI", 18, QFont.Bold))
         self.title_label.setAlignment(Qt.AlignCenter)
         self.title_label.setProperty("class", "panel-title")
 
-        self.connection_status = QLabel("Searching...")
+        self.connection_status = QLabel(TEXTS["en" if english_language else "az"]["searching"])
         self.connection_status.setObjectName("ConnectionStatus")
         self.connection_status.setFont(QFont("Segoe UI", 12))
         self.connection_status.setAlignment(Qt.AlignCenter)
         
-        self.target_label = QLabel(f"Target: {DNS_SERVER}")
-        self.target_label.setFont(QFont("Segoe UI", 10))
-        self.target_label.setAlignment(Qt.AlignCenter)
-        
         self.ping_result_list = QListWidget()
         self.ping_result_list.setObjectName("PingResultList")
-        self.ping_result_list.setFont(QFont("Segoe UI", 12))
+        self.ping_result_list.setFont(QFont("Segoe UI", 10))  # Reduced font size for ping results
         self.ping_result_list.setSpacing(4)
         
         layout.addWidget(self.title_label)
         layout.addWidget(self.connection_status)
-        layout.addWidget(self.target_label)
         layout.addWidget(self.ping_result_list)
         return panel
 
@@ -696,12 +806,12 @@ class PingApp(QWidget):
         self.alarm_status.setFont(QFont("Segoe UI", 14, QFont.Bold))
         self.alarm_status.setAlignment(Qt.AlignCenter)
         
-        self.stop_alarm_btn = QPushButton("🚨 STOP ALARM")
+        self.stop_alarm_btn = QPushButton(TEXTS["en" if english_language else "az"]["stop_alarm"])
         self.stop_alarm_btn.clicked.connect(self.stop_alarm_sound)
         self.stop_alarm_btn.setVisible(False)
         self.stop_alarm_btn.setProperty("class", "stop-alarm-btn")
 
-        self.daily_alarms_title = QLabel("ALARM MANAGEMENT")
+        self.daily_alarms_title = QLabel(TEXTS["en" if english_language else "az"]["alarm_management"])
         self.daily_alarms_title.setFont(QFont("Segoe UI", 16, QFont.Bold))
         self.daily_alarms_title.setAlignment(Qt.AlignCenter)
         self.daily_alarms_title.setProperty("class", "panel-title")
@@ -715,15 +825,15 @@ class PingApp(QWidget):
         alarm_btn_layout = QHBoxLayout()
         alarm_btn_layout.setSpacing(10)
         
-        self.add_new_alarm_btn = QPushButton("Add New")
+        self.add_new_alarm_btn = QPushButton(TEXTS["en" if english_language else "az"]["add_new"])
         self.add_new_alarm_btn.clicked.connect(self.add_new_alarm)
         self.add_new_alarm_btn.setProperty("class", "action-btn")
         
-        self.delete_selected_alarm_btn = QPushButton("Delete Selected")
+        self.delete_selected_alarm_btn = QPushButton(TEXTS["en" if english_language else "az"]["delete_selected"])
         self.delete_selected_alarm_btn.clicked.connect(self.delete_selected_alarm)
         self.delete_selected_alarm_btn.setProperty("class", "action-btn danger")
         
-        self.save_managed_alarms_btn = QPushButton("Save Alarms")
+        self.save_managed_alarms_btn = QPushButton(TEXTS["en" if english_language else "az"]["save_alarms"])
         self.save_managed_alarms_btn.clicked.connect(self.save_alarms_data)
         self.save_managed_alarms_btn.setProperty("class", "action-btn success")
         
@@ -795,8 +905,8 @@ class PingApp(QWidget):
     def set_tray_menu(self):
         """Create tray icon context menu"""
         tray_menu = QMenu()
-        restore_action = QAction("Show", self, triggered=self.showNormal)
-        quit_action = QAction("Quit", self, triggered=self.close)
+        restore_action = QAction(TEXTS["en" if english_language else "az"]["tray_show"], self, triggered=self.showNormal)
+        quit_action = QAction(TEXTS["en" if english_language else "az"]["tray_quit"], self, triggered=self.close)
         tray_menu.addAction(restore_action)
         tray_menu.addSeparator()
         tray_menu.addAction(quit_action)
@@ -812,8 +922,8 @@ class PingApp(QWidget):
     def closeEvent(self, event):
         """Handle window close event"""
         reply = QMessageBox.question(self, 
-                                   "Quit?",
-                                   "Quit the application?",
+                                   TEXTS["en" if english_language else "az"]["quit_title"],
+                                   TEXTS["en" if english_language else "az"]["quit_message"],
                                    QMessageBox.Yes | QMessageBox.Cancel, 
                                    QMessageBox.Yes)
         
@@ -876,16 +986,19 @@ class PingApp(QWidget):
             
             # Add default alarms if none loaded
             if not self.managed_alarms:
-                self.managed_alarms.append(Alarm(9, 0, True, "Morning Alarm"))
-                self.managed_alarms.append(Alarm(11, 0, True, "Lunch Reminder"))
-                self.managed_alarms.append(Alarm(14, 0, True, "Afternoon Break"))
-                self.managed_alarms.append(Alarm(17, 0, True, "End of Day"))
+                lang = "en" if english_language else "az"
+                self.managed_alarms.append(Alarm(9, 0, True, TEXTS[lang]["default_alarms"][0]))
+                self.managed_alarms.append(Alarm(11, 0, True, TEXTS[lang]["default_alarms"][1]))
+                self.managed_alarms.append(Alarm(14, 0, True, TEXTS[lang]["default_alarms"][2]))
+                self.managed_alarms.append(Alarm(17, 0, True, TEXTS[lang]["default_alarms"][3]))
                 self.save_alarms_data()
             
             # Update UI with loaded alarms
             self.update_alarm_list_ui()
         except Exception as e:
-            QMessageBox.warning(self, "Alarm Load Error", f"Failed to load alarms: {e}")
+            QMessageBox.warning(self, 
+                              TEXTS["en" if english_language else "az"]["alarm_load_error"], 
+                              f"{TEXTS['en' if english_language else 'az']['alarm_load_error']}: {e}")
 
     def save_alarms_data(self):
         """Save alarms to config file"""
@@ -900,24 +1013,27 @@ class PingApp(QWidget):
             with open(CONFIG_FILE, 'w', encoding='utf-8') as f:
                 json.dump(config, f, indent=4, ensure_ascii=False)
         except Exception as e:
-            QMessageBox.critical(self, "Alarm Save Error", f"Could not save alarms: {e}")
+            QMessageBox.critical(self, 
+                               TEXTS["en" if english_language else "az"]["alarm_save_error"], 
+                               f"{TEXTS['en' if english_language else 'az']['alarm_save_error']}: {e}")
 
     def create_menu_bar(self):
         """Create application menu bar"""
         menubar = QMenuBar(self)
         self.layout().setMenuBar(menubar)
-        settings_menu = menubar.addMenu("&Settings")
+        settings_menu = menubar.addMenu(TEXTS["en" if english_language else "az"]["menu_settings"])
         
-        open_settings_action = QAction("Open Settings", self, triggered=self.show_settings_dialog)
+        open_settings_action = QAction(TEXTS["en" if english_language else "az"]["menu_open_settings"], self, triggered=self.show_settings_dialog)
         settings_menu.addAction(open_settings_action)
         settings_menu.addSeparator()
-        exit_action = QAction("Exit", self, triggered=self.close)
+        exit_action = QAction(TEXTS["en" if english_language else "az"]["menu_exit"], self, triggered=self.close)
         settings_menu.addAction(exit_action)
 
     def show_settings_dialog(self):
         """Show settings dialog"""
         dialog = SettingsDialog(self)
         dialog.settings_changed.connect(self.handle_settings_changed)
+        dialog.language_changed.connect(self.update_texts)
         dialog.exec_()
 
     def handle_settings_changed(self):
@@ -931,6 +1047,44 @@ class PingApp(QWidget):
         self.ping_thread.ping_result_signal.connect(self.update_ping_graph)
         self.ping_thread.start()
         self.save_config()
+
+    def update_texts(self, lang=None):
+        """Update all UI texts based on current language"""
+        lang = "en" if english_language else "az" if lang is None else lang
+        
+        # Main window
+        self.setWindowTitle(TEXTS[lang]["main_title"])
+        
+        # Ping panel
+        self.title_label.setText(TEXTS[lang]["ping_monitor_title"])
+        self.connection_status.setText(TEXTS[lang]["searching"])
+        
+        # Alarm panel
+        self.daily_alarms_title.setText(TEXTS[lang]["alarm_management"])
+        self.stop_alarm_btn.setText(TEXTS[lang]["stop_alarm"])
+        self.add_new_alarm_btn.setText(TEXTS[lang]["add_new"])
+        self.delete_selected_alarm_btn.setText(TEXTS[lang]["delete_selected"])
+        self.save_managed_alarms_btn.setText(TEXTS[lang]["save_alarms"])
+        
+        # Graph panel
+        self.graphWidget.setTitle(TEXTS[lang]["ping_graph_title"])
+        
+        # Menu bar
+        if self.layout() and self.layout().menuBar():
+            menu_bar = self.layout().menuBar()
+            for action in menu_bar.actions():
+                if action.text() == TEXTS["en" if lang == "az" else "az"]["menu_settings"]:
+                    action.setText(TEXTS[lang]["menu_settings"])
+                elif action.text() == TEXTS["en" if lang == "az" else "az"]["menu_open_settings"]:
+                    action.setText(TEXTS[lang]["menu_open_settings"])
+                elif action.text() == TEXTS["en" if lang == "az" else "az"]["menu_exit"]:
+                    action.setText(TEXTS[lang]["menu_exit"])
+        
+        # Tray menu
+        self.set_tray_menu()
+        
+        # IP info
+        self.update_ip_info()
 
     def apply_theme(self):
         """Apply current theme to UI"""
@@ -1013,10 +1167,10 @@ class PingApp(QWidget):
                 margin-top: 10px;
             }}
             
-            #LocationLabel {{
-                color: {colors['text_muted']};
-                margin-top: 5px;
-                font-size: 30px;
+            /* IP labels */
+            #LocalIpLabel:hover, #PublicIpLabel:hover {{
+                color: {colors['accent_blue']};
+                text-decoration: underline;
             }}
             
             /* Buttons */
@@ -1108,8 +1262,8 @@ class PingApp(QWidget):
     def update_clock(self):
         """Update clock display with current time"""
         try:
-            # Use Turkey timezone as default
-            timezone = pytz.timezone(pytz.country_timezones['tr'][0])
+            # Azerbaijan timezone (UTC+4)
+            timezone = pytz.timezone('Asia/Baku')
             current_time = datetime.now(timezone)
             
             # Update time
@@ -1119,11 +1273,14 @@ class PingApp(QWidget):
             # Update date if day changed
             if not hasattr(self, 'last_date') or self.last_date != current_time.date():
                 self.last_date = current_time.date()
-                self.update_location_info()
+                date_str = current_time.strftime('%d %B %Y, %A')
+                self.current_date_label.setText(date_str)
+                self.update_ip_info()
                 
         except Exception as e:
             print(f"Clock update error: {e}")
             self.current_time_label.setText(datetime.now().strftime("%H:%M:%S"))
+            self.current_date_label.setText(datetime.now().strftime('%d %B %Y, %A'))
 
     def update_ping_display(self, message, is_success):
         """Add new ping result to display"""
@@ -1209,20 +1366,21 @@ class PingApp(QWidget):
 
     def add_new_alarm(self):
         """Add new alarm through dialog"""
-        text, ok = QInputDialog.getText(self, "New Alarm Name", 
-                                      "Enter alarm name:")
+        text, ok = QInputDialog.getText(self, 
+                                      TEXTS["en" if english_language else "az"]["new_alarm_title"], 
+                                      TEXTS["en" if english_language else "az"]["new_alarm_prompt"])
         if not ok or not text:
             return
 
         time_dialog = QDialog(self)
-        time_dialog.setWindowTitle("Set Alarm Time")
+        time_dialog.setWindowTitle(TEXTS["en" if english_language else "az"]["set_time_title"])
         time_layout = QVBoxLayout(time_dialog)
         time_edit = QTimeEdit(QTime.currentTime())
         time_edit.setDisplayFormat("HH:mm")
         time_edit.setFont(QFont("Segoe UI", 24))
-        ok_button = QPushButton("OK")
+        ok_button = QPushButton(TEXTS["en" if english_language else "az"]["ok"])
         ok_button.clicked.connect(time_dialog.accept)
-        time_layout.addWidget(QLabel("Select time:"))
+        time_layout.addWidget(QLabel(TEXTS["en" if english_language else "az"]["select_time"]))
         time_layout.addWidget(time_edit)
         time_layout.addWidget(ok_button)
 
@@ -1235,18 +1393,22 @@ class PingApp(QWidget):
                 self.update_alarm_list_ui()
                 self.save_alarms_data()
             else:
-                QMessageBox.warning(self, "Duplicate Alarm", "An alarm with this time and name already exists.")
+                QMessageBox.warning(self, 
+                                   TEXTS["en" if english_language else "az"]["new_alarm_title"], 
+                                   TEXTS["en" if english_language else "az"]["duplicate_alarm"])
 
     def delete_selected_alarm(self):
         """Delete selected alarms"""
         selected_items = self.managed_alarms_list.selectedItems()
         if not selected_items:
-            QMessageBox.information(self, "No Selection", "Please select at least one alarm to delete.")
+            QMessageBox.information(self, 
+                                   TEXTS["en" if english_language else "az"]["new_alarm_title"], 
+                                   TEXTS["en" if english_language else "az"]["no_selection"])
             return
 
         reply = QMessageBox.question(self, 
-                                   "Confirm Deletion",
-                                   f"Are you sure you want to delete {len(selected_items)} selected alarm(s)?",
+                                   TEXTS["en" if english_language else "az"]["new_alarm_title"],
+                                   TEXTS["en" if english_language else "az"]["confirm_delete"].format(len(selected_items)),
                                    QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
 
         if reply == QMessageBox.Yes:
