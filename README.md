@@ -55,6 +55,12 @@ If icon.png, error.wav or alarm.wav are missing, the app will warn and may creat
 
 ## 📸 Screenshots
 
+<img width="400"  alt="Untitled" src="https://github.com/user-attachments/assets/6c52fdc6-bcf1-4706-a780-bf2b06493378" />
+<img width="400"  alt="Untitled11" src="https://github.com/user-attachments/assets/deb0e5ee-e005-4934-bd55-a0cbc178e8e5" />
+<img width="400" alt="Untitled2" src="https://github.com/user-attachments/assets/d2b9dc3d-f787-48ab-8abc-316db4c3ea64" />
+<img width="400" alt="Untitled222png" src="https://github.com/user-attachments/assets/95c72116-efac-4b65-b1dd-634dd86d11b0" />
+
+
 ## 💡 Notes
 On Windows, sound playback uses the built-in winsound module.
 
