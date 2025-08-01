@@ -37,6 +37,13 @@ except ImportError:
     ping3 = None
     print("Warning: 'ping3' library not found. Falling back to subprocess ping.")
 
+try:
+    import speedtest
+except ImportError:
+    speedtest = None
+    print("Warning: 'speedtest-cli' library not found. Speed test feature will be disabled.")
+
+
 # --- Global Settings ---
 DNS_SERVER = "8.8.8.8"
 PING_TIMEOUT = 1
@@ -92,33 +99,44 @@ TEXTS = {
         "menu_exit": "Exit",
         "tray_show": "Show",
         "tray_quit": "Quit",
-        "default_alarms": ["Morning Alarm", "Lunch Reminder", "Afternoon Break", "End of Day"]
+        "default_alarms": ["Morning Alarm", "Lunch Reminder", "Afternoon Break", "End of Day"],
+        "speed_test": "Speed Test",
+        "speed_test_results": "Speed Test Results",
+        "download_speed": "Download",
+        "upload_speed": "Upload",
+        "testing_download": "Testing Download Speed...",
+        "testing_upload": "Testing Upload Speed...",
+        "test_completed": "Test Completed",
+        "mbps": "Mbps",
+        "close": "Close",
+        "speed_test_error_title": "Speed Test Error",
+        "speed_test_failed": "Speed test failed: {}"
     },
     "az": {
-        "main_title": "🚀 DNS Ping & Alarm Monitor (AZ)",
+        "main_title": "🚀 DNS Ping & Siqnal Monitoru",
         "settings_title": "Parametrlər",
         "dns_server": "DNS/IP Server:",
         "ping_interval": "Ping intervalı (s):",
         "ping_timeout": "Ping zaman aşımı (s):",
         "language": "Dil:",
         "theme": "Mövzu:",
-        "error_sound": "Səhv səsi:",
+        "error_sound": "Xəta səsi:",
         "alarm_sound": "Siqnal səsi:",
         "save": "Yadda saxla",
-        "browse": "Seç...",
+        "browse": "Göz at...",
         "ping_graph_title": "Ping cavab müddəti (ms)",
-        "ping_monitor_title": "DNS Ping Monitor",
+        "ping_monitor_title": "DNS Ping Monitoru",
         "searching": "Axtarılır...",
         "internet_good": "✓ İnternet: Yaxşı",
         "internet_poor": "✗ İnternet: Zəif",
-        "alarm_management": "SİQNAL İDARƏETMƏ",
+        "alarm_management": "SİQNAL İDARƏETMƏSİ",
         "alarm_ringing": "🚨 Siqnal çalır!",
         "stop_alarm": "🚨 SİQNALI DAYANDIR",
         "add_new": "Yeni əlavə et",
-        "delete_selected": "Seçilmişi sil",
+        "delete_selected": "Seçilənləri sil",
         "save_alarms": "Siqnalları yadda saxla",
-        "no_selection": "Silinməsi üçün ən azı bir siqnal seçin.",
-        "confirm_delete": "Seçilmiş {} siqnalı silmək istədiyinizə əminsiniz?",
+        "no_selection": "Silmək üçün ən azı bir siqnal seçin.",
+        "confirm_delete": "Seçilmiş {} siqnalı silməyə əminsiniz?",
         "duplicate_alarm": "Bu vaxt və adla siqnal artıq mövcuddur.",
         "quit_title": "Çıxış?",
         "quit_message": "Proqramdan çıxmaq istəyirsiniz?",
@@ -130,14 +148,25 @@ TEXTS = {
         "select_time": "Vaxtı seçin:",
         "ok": "TAMAM",
         "local_ip": "Lokal IP:",
-        "public_ip": "Ümumi IP:",
+        "public_ip": "Xarici IP:",
         "ip_not_available": "Mövcud deyil",
         "menu_settings": "&Parametrlər",
         "menu_open_settings": "Parametrləri aç",
         "menu_exit": "Çıxış",
         "tray_show": "Göstər",
         "tray_quit": "Çıx",
-        "default_alarms": ["Səhər siqnalı", "Nahar xatırlatması", "Günortadan sonra fasilə", "Günün sonu"]
+        "default_alarms": ["Səhər siqnalı", "Nahar xatırlatması", "Günortadan sonra fasilə", "Günün sonu"],
+        "speed_test": "Sürət Testi",
+        "speed_test_results": "Sürət Testi Nəticələri",
+        "download_speed": "Yükləmə",
+        "upload_speed": "Qarşıya Yükləmə",
+        "testing_download": "Yükləmə sürəti yoxlanılır...",
+        "testing_upload": "Qarşıya yükləmə sürəti yoxlanılır...",
+        "test_completed": "Test Tamamlandı",
+        "mbps": "Mbit/s",
+        "close": "Bağla",
+        "speed_test_error_title": "Sürət Testi Xətası",
+        "speed_test_failed": "Sürət testi uğursuz oldu: {}"
     }
 }
 
@@ -159,7 +188,7 @@ COLORS = {
         'text_secondary': '#E0E0E0',
         'text_muted': '#A0A0A0',
         'border': '#383838',
-        'success_bg': "#3DDC97FF",
+        'success_bg': "#3DDC9730",
         'error_bg': "#FF5E5B20",
         'warning_bg': '#FF9F1C20',
         'hover': 'rgba(255, 255, 255, 0.08)',
@@ -207,7 +236,7 @@ class Alarm:
     @staticmethod
     def from_dict(data):
         """Create Alarm object from dictionary"""
-        return Alarm(data.get("hour", 0), data.get("minute", 0), 
+        return Alarm(data.get("hour", 0), data.get("minute", 0),
                    data.get("enabled", True), data.get("name", "Alarm"))
 
     def __eq__(self, other):
@@ -310,6 +339,226 @@ class SoundManager(QObject):
         if platform.system().lower() == "windows" and winsound:
             winsound.PlaySound(None, winsound.SND_PURGE)
 
+class SpeedTestThread(QThread):
+    """Thread for running an internet speed test with real-time progress."""
+    download_progress = pyqtSignal(float)
+    upload_progress = pyqtSignal(float)
+    test_finished = pyqtSignal(float, float)
+    error_signal = pyqtSignal(str)
+    upload_started = pyqtSignal()
+
+    def run(self):
+        """Executes the speed test, reporting progress along the way."""
+        if not speedtest or not requests:
+            self.error_signal.emit("Speedtest or Requests library not installed.")
+            return
+
+        try:
+            st = speedtest.Speedtest(secure=True)
+            st.get_best_server()
+
+            # --- Real-time Download Test ---
+            download_url = os.path.dirname(st.results.server['url'])
+            test_file_url = f"{download_url}/random3500x3500.jpg"
+
+            start_time = time.time()
+            bytes_downloaded = 0
+            with requests.get(test_file_url, stream=True, timeout=10) as r:
+                r.raise_for_status()
+                for chunk in r.iter_content(chunk_size=8192):
+                    if self.isInterruptionRequested():
+                        return
+                    bytes_downloaded += len(chunk)
+                    elapsed_time = time.time() - start_time
+                    if elapsed_time > 0.1:
+                        speed_bps = (bytes_downloaded * 8) / elapsed_time
+                        self.download_progress.emit(speed_bps / 1_000_000)
+                    if elapsed_time > 10:  # Prevent test from running too long
+                        break
+
+            final_download_time = time.time() - start_time
+            final_download_speed = (bytes_downloaded * 8 / final_download_time) / 1_000_000
+            self.download_progress.emit(final_download_speed)
+
+            self.upload_started.emit()
+
+            # --- Animated Upload Test ---
+            st.upload(threads=None)
+            final_upload_speed = st.results.upload / 1_000_000
+
+            # Animate the result for a better user experience
+            animation_steps = 20
+            for i in range(1, animation_steps + 1):
+                if self.isInterruptionRequested():
+                    return
+                animated_speed = (final_upload_speed / animation_steps) * i
+                self.upload_progress.emit(animated_speed)
+                time.sleep(0.05)
+
+            self.upload_progress.emit(final_upload_speed)
+            self.test_finished.emit(final_download_speed, final_upload_speed)
+
+        except Exception as e:
+            self.error_signal.emit(str(e))
+
+
+class SpeedTestDialog(QDialog):
+    """Dialog to display the animated speed test results."""
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        lang = "en" if english_language else "az"
+        self.setWindowTitle(TEXTS[lang]["speed_test_results"])
+        self.setMinimumSize(800, 600)
+
+        self.download_data = []
+        self.download_time = []
+        self.upload_data = []
+        self.upload_time = []
+        self.start_time = time.time()
+
+        self.init_ui()
+        self.apply_theme()
+
+        self.test_thread = SpeedTestThread()
+        self.test_thread.download_progress.connect(self.update_download_graph)
+        self.test_thread.upload_started.connect(self.prepare_for_upload)
+        self.test_thread.upload_progress.connect(self.update_upload_graph)
+        self.test_thread.test_finished.connect(self.on_test_finished)
+        self.test_thread.error_signal.connect(self.on_test_error)
+        self.test_thread.start()
+
+    def init_ui(self):
+        lang = "en" if english_language else "az"
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(15, 15, 15, 15)
+        layout.setSpacing(15)
+
+        self.status_label = QLabel(TEXTS[lang]["testing_download"])
+        self.status_label.setObjectName("StatusLabel")
+        self.status_label.setAlignment(Qt.AlignCenter)
+        layout.addWidget(self.status_label)
+
+        results_frame = QFrame()
+        results_layout = QHBoxLayout(results_frame)
+
+        # Download Panel
+        download_panel = QVBoxLayout()
+        download_title = QLabel(TEXTS[lang]["download_speed"])
+        download_title.setObjectName("SpeedTitleLabel")
+        self.download_label = QLabel(f"0.00 {TEXTS[lang]['mbps']}")
+        self.download_label.setObjectName("SpeedValueLabel")
+        download_panel.addWidget(download_title, alignment=Qt.AlignCenter)
+        download_panel.addWidget(self.download_label, alignment=Qt.AlignCenter)
+
+        # Upload Panel
+        upload_panel = QVBoxLayout()
+        upload_title = QLabel(TEXTS[lang]["upload_speed"])
+        upload_title.setObjectName("SpeedTitleLabel")
+        self.upload_label = QLabel(f"0.00 {TEXTS[lang]['mbps']}")
+        self.upload_label.setObjectName("SpeedValueLabel")
+        upload_panel.addWidget(upload_title, alignment=Qt.AlignCenter)
+        upload_panel.addWidget(self.upload_label, alignment=Qt.AlignCenter)
+
+        results_layout.addLayout(download_panel)
+        results_layout.addLayout(upload_panel)
+        layout.addWidget(results_frame)
+
+        self.graphWidget = pg.PlotWidget()
+        self.graphWidget.setLabel('left', "Speed (Mbps)")
+        self.graphWidget.setLabel('bottom', "Time (s)")
+        self.graphWidget.showGrid(x=True, y=True, alpha=0.3)
+        self.download_plot = self.graphWidget.plot(pen=pg.mkPen(width=3), name="Download")
+        self.upload_plot = self.graphWidget.plot(pen=pg.mkPen(width=3), name="Upload")
+        layout.addWidget(self.graphWidget)
+
+        self.close_button = QPushButton(TEXTS[lang]["close"])
+        self.close_button.setProperty("class", "action-btn")
+        self.close_button.clicked.connect(self.accept)
+        self.close_button.setEnabled(False)
+        layout.addWidget(self.close_button, alignment=Qt.AlignRight)
+
+    def apply_theme(self):
+        colors = COLORS['dark'] if dark_mode else COLORS['light']
+        lang = "en" if english_language else "az"
+        style = f"""
+            QDialog {{
+                background-color: {colors['primary']};
+                color: {colors['text_primary']};
+                font-family: 'Segoe UI', Arial, sans-serif;
+            }}
+            #StatusLabel {{
+                font-size: 16px;
+                font-weight: bold;
+                color: {colors['text_secondary']};
+            }}
+            #SpeedTitleLabel {{
+                font-size: 14px;
+                color: {colors['text_muted']};
+            }}
+            #SpeedValueLabel {{
+                font-size: 28px;
+                font-weight: bold;
+                color: {colors['text_primary']};
+            }}
+            QPushButton.action-btn {{
+                background-color: {colors['tertiary']};
+                border: 1px solid {colors['border']};
+                border-radius: 6px; padding: 8px 16px;
+                color: {colors['text_primary']}; min-height: 28px;
+            }}
+            QPushButton.action-btn:hover {{ background-color: {colors['hover']}; }}
+            QPushButton.action-btn:disabled {{
+                background-color: {colors['tertiary']};
+                color: {colors['text_muted']};
+            }}
+        """
+        self.setStyleSheet(style)
+        self.graphWidget.setBackground(colors['secondary'])
+        self.graphWidget.getAxis('bottom').setPen(pg.mkPen(color=colors['text_muted']))
+        self.graphWidget.getAxis('left').setPen(pg.mkPen(color=colors['text_muted']))
+        self.download_plot.setPen(pg.mkPen(color=colors['accent_blue'], width=3))
+        self.upload_plot.setPen(pg.mkPen(color=colors['accent_green'], width=3))
+
+    def update_download_graph(self, speed_mbps):
+        lang = "en" if english_language else "az"
+        self.download_time.append(time.time() - self.start_time)
+        self.download_data.append(speed_mbps)
+        self.download_plot.setData(self.download_time, self.download_data)
+        self.download_label.setText(f"{speed_mbps:.2f} {TEXTS[lang]['mbps']}")
+
+    def prepare_for_upload(self):
+        lang = "en" if english_language else "az"
+        self.status_label.setText(TEXTS[lang]["testing_upload"])
+        self.upload_time_offset = self.download_time[-1] if self.download_time else 0
+        self.upload_start_time = time.time()
+
+    def update_upload_graph(self, speed_mbps):
+        lang = "en" if english_language else "az"
+        if not hasattr(self, 'upload_start_time'): return
+        self.upload_time.append((time.time() - self.upload_start_time) + self.upload_time_offset)
+        self.upload_data.append(speed_mbps)
+        self.upload_plot.setData(self.upload_time, self.upload_data)
+        self.upload_label.setText(f"{speed_mbps:.2f} {TEXTS[lang]['mbps']}")
+
+    def on_test_finished(self, final_download, final_upload):
+        lang = "en" if english_language else "az"
+        self.status_label.setText(TEXTS[lang]["test_completed"])
+        self.download_label.setText(f"{final_download:.2f} {TEXTS[lang]['mbps']}")
+        self.upload_label.setText(f"{final_upload:.2f} {TEXTS[lang]['mbps']}")
+        self.close_button.setEnabled(True)
+
+    def on_test_error(self, error_message):
+        lang = "en" if english_language else "az"
+        QMessageBox.critical(self, TEXTS[lang]["speed_test_error_title"], TEXTS[lang]["speed_test_failed"].format(error_message))
+        self.accept()
+
+    def closeEvent(self, event):
+        if self.test_thread.isRunning():
+            self.test_thread.requestInterruption()
+            self.test_thread.quit()
+            self.test_thread.wait(2000) # Wait up to 2s
+        event.accept()
+
 class PingThread(QThread):
     """Thread for continuous ping monitoring"""
     update_signal = pyqtSignal(str, bool)  # Message, is_success
@@ -376,11 +625,11 @@ class AlarmThread(QThread):
 
             for alarm_timestamp in active_alarm_timestamps[:]:
                 alarm_time = datetime.fromtimestamp(alarm_timestamp)
-                
+
                 if now.hour == alarm_time.hour and \
                    now.minute == alarm_time.minute and \
                    (alarm_time.hour, alarm_time.minute) not in self.triggered_today:
-                    
+
                     active_alarm_ringing = True
                     self.triggered_today.add((alarm_time.hour, alarm_time.minute))
                     alarm_msg = TEXTS["en" if english_language else "az"]["alarm_ringing"]
@@ -429,7 +678,7 @@ class SettingsDialog(QDialog):
         self.ping_timeout_spin.setValue(PING_TIMEOUT)
         self.ping_timeout_spin.setProperty("class", "input-field")
         layout.addRow(QLabel(TEXTS["en" if english_language else "az"]["ping_timeout"]), self.ping_timeout_spin)
-        
+
         # Language
         self.language_combo = QComboBox()
         self.language_combo.addItem("English", True)
@@ -464,7 +713,7 @@ class SettingsDialog(QDialog):
         alarm_sound_layout.addWidget(self.alarm_sound_label)
         alarm_sound_layout.addWidget(change_alarm_sound_btn)
         layout.addRow(QLabel(TEXTS["en" if english_language else "az"]["alarm_sound"]), alarm_sound_layout)
-        
+
         # Save button
         save_button = QPushButton(TEXTS["en" if english_language else "az"]["save"])
         save_button.setProperty("class", "save-btn")
@@ -565,12 +814,12 @@ class SettingsDialog(QDialog):
         DNS_SERVER = self.dns_input.text() or "8.8.8.8"
         PING_INTERVAL = self.ping_interval_spin.value()
         PING_TIMEOUT = self.ping_timeout_spin.value()
-        
+
         # Check if language changed
         lang_changed = english_language != self.language_combo.currentData()
         english_language = self.language_combo.currentData()
         dark_mode = self.theme_combo.currentData()
-        
+
         self.settings_changed.emit()
         if lang_changed:
             self.language_changed.emit("en" if english_language else "az")
@@ -671,17 +920,17 @@ class PingApp(QWidget):
         self.current_time_label.setObjectName("CurrentTimeLabel")
         self.current_time_label.setFont(QFont("Segoe UI", 48, QFont.Bold))
         self.current_time_label.setAlignment(Qt.AlignCenter)
-        
+
         # Date display
         self.current_date_label = QLabel()
         self.current_date_label.setObjectName("CurrentDateLabel")
         self.current_date_label.setFont(QFont("Segoe UI", 24))
         self.current_date_label.setAlignment(Qt.AlignCenter)
-        
+
         # IP addresses
         ip_layout = QVBoxLayout()
         ip_layout.setSpacing(5)
-        
+
         # Local IP
         self.local_ip_label = QLabel()
         self.local_ip_label.setObjectName("LocalIpLabel")
@@ -689,7 +938,7 @@ class PingApp(QWidget):
         self.local_ip_label.setAlignment(Qt.AlignCenter)
         self.local_ip_label.setCursor(QCursor(Qt.PointingHandCursor))
         self.local_ip_label.mousePressEvent = lambda e: QApplication.clipboard().setText(self.local_ip_label.text().split(": ")[1])
-        
+
         # Public IP
         self.public_ip_label = QLabel()
         self.public_ip_label.setObjectName("PublicIpLabel")
@@ -697,10 +946,10 @@ class PingApp(QWidget):
         self.public_ip_label.setAlignment(Qt.AlignCenter)
         self.public_ip_label.setCursor(QCursor(Qt.PointingHandCursor))
         self.public_ip_label.mousePressEvent = lambda e: QApplication.clipboard().setText(self.public_ip_label.text().split(": ")[1])
-        
+
         ip_layout.addWidget(self.local_ip_label)
         ip_layout.addWidget(self.public_ip_label)
-        
+
         # Glow effect for clock
         glow = QGraphicsDropShadowEffect()
         glow.setBlurRadius(20)
@@ -711,10 +960,10 @@ class PingApp(QWidget):
         layout.addWidget(self.current_time_label)
         layout.addWidget(self.current_date_label)
         layout.addLayout(ip_layout)
-        
+
         # Initialize IP info
         self.update_ip_info()
-        
+
         return panel
 
     def update_ip_info(self):
@@ -724,14 +973,14 @@ class PingApp(QWidget):
             hostname = socket.gethostname()
             local_ip = socket.gethostbyname(hostname)
             self.local_ip_label.setText(f"{TEXTS['en' if english_language else 'az']['local_ip']} {local_ip}")
-            
+
             # Get public IP (with timeout to prevent blocking)
             try:
                 public_ip = requests.get('https://api.ipify.org', timeout=3).text
                 self.public_ip_label.setText(f"{TEXTS['en' if english_language else 'az']['public_ip']} {public_ip}")
             except:
                 self.public_ip_label.setText(f"{TEXTS['en' if english_language else 'az']['public_ip']} {TEXTS['en' if english_language else 'az']['ip_not_available']}")
-                
+
         except Exception as e:
             print(f"IP info error: {e}")
             self.local_ip_label.setText(f"{TEXTS['en' if english_language else 'az']['local_ip']} {TEXTS['en' if english_language else 'az']['ip_not_available']}")
@@ -746,11 +995,11 @@ class PingApp(QWidget):
         layout.setContentsMargins(15, 15, 15, 15)
         layout.setSpacing(15)
 
-        graph_title = QLabel(TEXTS["en" if english_language else "az"]["ping_graph_title"])
-        graph_title.setFont(QFont("Segoe UI", 14, QFont.Bold))
-        graph_title.setAlignment(Qt.AlignCenter)
-        graph_title.setProperty("class", "panel-title")
-        layout.addWidget(graph_title)
+        self.graph_title = QLabel(TEXTS["en" if english_language else "az"]["ping_graph_title"])
+        self.graph_title.setFont(QFont("Segoe UI", 14, QFont.Bold))
+        self.graph_title.setAlignment(Qt.AlignCenter)
+        self.graph_title.setProperty("class", "panel-title")
+        layout.addWidget(self.graph_title)
 
         self.graphWidget = pg.PlotWidget()
         self.graphWidget.setBackground(COLORS['dark']['tertiary'] if dark_mode else COLORS['light']['tertiary'])
@@ -759,7 +1008,7 @@ class PingApp(QWidget):
         self.graphWidget.setLabel('bottom', "Time")
         self.graphWidget.showGrid(x=True, y=True)
         self.graphWidget.setYRange(0, 100)
-        
+
         layout.addWidget(self.graphWidget)
         return panel
 
@@ -781,12 +1030,12 @@ class PingApp(QWidget):
         self.connection_status.setObjectName("ConnectionStatus")
         self.connection_status.setFont(QFont("Segoe UI", 12))
         self.connection_status.setAlignment(Qt.AlignCenter)
-        
+
         self.ping_result_list = QListWidget()
         self.ping_result_list.setObjectName("PingResultList")
         self.ping_result_list.setFont(QFont("Segoe UI", 10))  # Reduced font size for ping results
         self.ping_result_list.setSpacing(4)
-        
+
         layout.addWidget(self.title_label)
         layout.addWidget(self.connection_status)
         layout.addWidget(self.ping_result_list)
@@ -805,7 +1054,7 @@ class PingApp(QWidget):
         self.alarm_status.setObjectName("AlarmStatus")
         self.alarm_status.setFont(QFont("Segoe UI", 14, QFont.Bold))
         self.alarm_status.setAlignment(Qt.AlignCenter)
-        
+
         self.stop_alarm_btn = QPushButton(TEXTS["en" if english_language else "az"]["stop_alarm"])
         self.stop_alarm_btn.clicked.connect(self.stop_alarm_sound)
         self.stop_alarm_btn.setVisible(False)
@@ -815,7 +1064,7 @@ class PingApp(QWidget):
         self.daily_alarms_title.setFont(QFont("Segoe UI", 16, QFont.Bold))
         self.daily_alarms_title.setAlignment(Qt.AlignCenter)
         self.daily_alarms_title.setProperty("class", "panel-title")
-        
+
         self.managed_alarms_list = QListWidget()
         self.managed_alarms_list.setSelectionMode(QListWidget.ExtendedSelection)
         self.managed_alarms_list.setFont(QFont("Segoe UI", 12))
@@ -824,23 +1073,32 @@ class PingApp(QWidget):
 
         alarm_btn_layout = QHBoxLayout()
         alarm_btn_layout.setSpacing(10)
-        
+
         self.add_new_alarm_btn = QPushButton(TEXTS["en" if english_language else "az"]["add_new"])
         self.add_new_alarm_btn.clicked.connect(self.add_new_alarm)
         self.add_new_alarm_btn.setProperty("class", "action-btn")
-        
+
         self.delete_selected_alarm_btn = QPushButton(TEXTS["en" if english_language else "az"]["delete_selected"])
         self.delete_selected_alarm_btn.clicked.connect(self.delete_selected_alarm)
         self.delete_selected_alarm_btn.setProperty("class", "action-btn danger")
-        
+
         self.save_managed_alarms_btn = QPushButton(TEXTS["en" if english_language else "az"]["save_alarms"])
         self.save_managed_alarms_btn.clicked.connect(self.save_alarms_data)
         self.save_managed_alarms_btn.setProperty("class", "action-btn success")
-        
+
+        self.speed_test_btn = QPushButton(TEXTS["en" if english_language else "az"]["speed_test"])
+        self.speed_test_btn.clicked.connect(self.run_speed_test)
+        self.speed_test_btn.setProperty("class", "action-btn")
+        if not speedtest:
+            self.speed_test_btn.setEnabled(False)
+            self.speed_test_btn.setToolTip("Install 'speedtest-cli' library to enable.")
+
+
         alarm_btn_layout.addWidget(self.add_new_alarm_btn)
         alarm_btn_layout.addWidget(self.delete_selected_alarm_btn)
         alarm_btn_layout.addWidget(self.save_managed_alarms_btn)
-        
+        alarm_btn_layout.addWidget(self.speed_test_btn)
+
         layout.addWidget(self.daily_alarms_title)
         layout.addWidget(self.managed_alarms_list)
         layout.addLayout(alarm_btn_layout)
@@ -848,6 +1106,16 @@ class PingApp(QWidget):
         layout.addWidget(self.stop_alarm_btn)
 
         return panel
+
+    def run_speed_test(self):
+        """Show the speed test dialog."""
+        if not speedtest:
+            QMessageBox.warning(self, "Feature Unavailable",
+                                "The 'speedtest-cli' library is not installed.\nPlease install it via: pip install speedtest-cli")
+            return
+        dialog = SpeedTestDialog(self)
+        dialog.exec_()
+
 
     def init_threads_and_timers(self):
         """Initialize and start background threads and timers"""
@@ -866,32 +1134,32 @@ class PingApp(QWidget):
         # Alarm thread signals
         self.alarm_thread.alarm_signal.connect(self.on_alarm_ring)
         self.alarm_thread.start()
-        
+
     def update_ping_graph(self, response_time):
         """Update ping response time graph with new data"""
         now = time.time()
-        
+
         # Add new data point
         self.ping_data.append(response_time)
         self.time_data.append(now)
-        
+
         # Keep only recent data points
         if len(self.ping_data) > self.max_data_points:
             self.ping_data = self.ping_data[-self.max_data_points:]
             self.time_data = self.time_data[-self.max_data_points:]
-        
+
         # Convert timestamps to relative seconds
         if len(self.time_data) > 0:
             relative_times = [t - self.time_data[0] for t in self.time_data]
-            
+
             # Update plot
             self.plot.setData(relative_times, self.ping_data)
-            
+
             # Auto-scale Y axis
             min_y = max(0, min(self.ping_data) - 5)
-            max_y = max(self.ping_data) + 5
+            max_y = max(100, max(self.ping_data) + 5)
             self.graphWidget.setYRange(min_y, max_y)
-            
+
             # Set X axis range
             self.graphWidget.setXRange(0, max(60, relative_times[-1] + 5))
 
@@ -921,12 +1189,12 @@ class PingApp(QWidget):
 
     def closeEvent(self, event):
         """Handle window close event"""
-        reply = QMessageBox.question(self, 
+        reply = QMessageBox.question(self,
                                    TEXTS["en" if english_language else "az"]["quit_title"],
                                    TEXTS["en" if english_language else "az"]["quit_message"],
-                                   QMessageBox.Yes | QMessageBox.Cancel, 
+                                   QMessageBox.Yes | QMessageBox.Cancel,
                                    QMessageBox.Yes)
-        
+
         if reply == QMessageBox.Yes:
             self.shutdown()
             event.accept()
@@ -983,7 +1251,7 @@ class PingApp(QWidget):
                     config = json.load(f)
                 alarms_data = config.get('managed_alarms', [])
                 self.managed_alarms = [Alarm.from_dict(d) for d in alarms_data]
-            
+
             # Add default alarms if none loaded
             if not self.managed_alarms:
                 lang = "en" if english_language else "az"
@@ -992,12 +1260,12 @@ class PingApp(QWidget):
                 self.managed_alarms.append(Alarm(14, 0, True, TEXTS[lang]["default_alarms"][2]))
                 self.managed_alarms.append(Alarm(17, 0, True, TEXTS[lang]["default_alarms"][3]))
                 self.save_alarms_data()
-            
+
             # Update UI with loaded alarms
             self.update_alarm_list_ui()
         except Exception as e:
-            QMessageBox.warning(self, 
-                              TEXTS["en" if english_language else "az"]["alarm_load_error"], 
+            QMessageBox.warning(self,
+                              TEXTS["en" if english_language else "az"]["alarm_load_error"],
                               f"{TEXTS['en' if english_language else 'az']['alarm_load_error']}: {e}")
 
     def save_alarms_data(self):
@@ -1007,14 +1275,14 @@ class PingApp(QWidget):
             if os.path.exists(CONFIG_FILE):
                 with open(CONFIG_FILE, 'r') as f:
                     config = json.load(f)
-            
+
             config['managed_alarms'] = [alarm.to_dict() for alarm in self.managed_alarms]
 
             with open(CONFIG_FILE, 'w', encoding='utf-8') as f:
                 json.dump(config, f, indent=4, ensure_ascii=False)
         except Exception as e:
-            QMessageBox.critical(self, 
-                               TEXTS["en" if english_language else "az"]["alarm_save_error"], 
+            QMessageBox.critical(self,
+                               TEXTS["en" if english_language else "az"]["alarm_save_error"],
                                f"{TEXTS['en' if english_language else 'az']['alarm_save_error']}: {e}")
 
     def create_menu_bar(self):
@@ -1022,7 +1290,7 @@ class PingApp(QWidget):
         menubar = QMenuBar(self)
         self.layout().setMenuBar(menubar)
         settings_menu = menubar.addMenu(TEXTS["en" if english_language else "az"]["menu_settings"])
-        
+
         open_settings_action = QAction(TEXTS["en" if english_language else "az"]["menu_open_settings"], self, triggered=self.show_settings_dialog)
         settings_menu.addAction(open_settings_action)
         settings_menu.addSeparator()
@@ -1051,45 +1319,49 @@ class PingApp(QWidget):
     def update_texts(self, lang=None):
         """Update all UI texts based on current language"""
         lang = "en" if english_language else "az" if lang is None else lang
-        
+
         # Main window
         self.setWindowTitle(TEXTS[lang]["main_title"])
-        
+
         # Ping panel
         self.title_label.setText(TEXTS[lang]["ping_monitor_title"])
         self.connection_status.setText(TEXTS[lang]["searching"])
-        
+
         # Alarm panel
         self.daily_alarms_title.setText(TEXTS[lang]["alarm_management"])
         self.stop_alarm_btn.setText(TEXTS[lang]["stop_alarm"])
         self.add_new_alarm_btn.setText(TEXTS[lang]["add_new"])
         self.delete_selected_alarm_btn.setText(TEXTS[lang]["delete_selected"])
         self.save_managed_alarms_btn.setText(TEXTS[lang]["save_alarms"])
-        
-        # Graph panel
-        self.graphWidget.setTitle(TEXTS[lang]["ping_graph_title"])
-        
+        if hasattr(self, 'speed_test_btn'):
+            self.speed_test_btn.setText(TEXTS[lang]["speed_test"])
+
+        # Graph panel title
+        if hasattr(self, 'graph_title'):
+            self.graph_title.setText(TEXTS[lang]["ping_graph_title"])
+
         # Menu bar
         if self.layout() and self.layout().menuBar():
             menu_bar = self.layout().menuBar()
-            for action in menu_bar.actions():
-                if action.text() == TEXTS["en" if lang == "az" else "az"]["menu_settings"]:
-                    action.setText(TEXTS[lang]["menu_settings"])
-                elif action.text() == TEXTS["en" if lang == "az" else "az"]["menu_open_settings"]:
-                    action.setText(TEXTS[lang]["menu_open_settings"])
-                elif action.text() == TEXTS["en" if lang == "az" else "az"]["menu_exit"]:
-                    action.setText(TEXTS[lang]["menu_exit"])
-        
+            actions = menu_bar.actions()
+            if actions:
+                settings_menu = actions[0].menu()
+                if settings_menu:
+                    menu_actions = settings_menu.actions()
+                    actions[0].setText(TEXTS[lang]["menu_settings"])
+                    menu_actions[0].setText(TEXTS[lang]["menu_open_settings"])
+                    menu_actions[2].setText(TEXTS[lang]["menu_exit"])
+
         # Tray menu
         self.set_tray_menu()
-        
+
         # IP info
         self.update_ip_info()
 
     def apply_theme(self):
         """Apply current theme to UI"""
         colors = COLORS['dark'] if dark_mode else COLORS['light']
-        
+
         style = f"""
             /* Main window styling */
             QWidget {{
@@ -1097,19 +1369,19 @@ class PingApp(QWidget):
                 color: {colors['text_primary']};
                 font-family: 'Segoe UI', Arial, sans-serif;
             }}
-            
+
             /* Panel styling */
             .panel {{
                 background-color: {colors['secondary']};
                 border-radius: 12px;
                 border: 1px solid {colors['border']};
             }}
-            
+
             .panel-title {{
                 color: {colors['accent_blue']};
                 margin-bottom: 10px;
             }}
-            
+
             /* List widgets */
             QListWidget {{
                 background-color: {colors['tertiary']};
@@ -1118,61 +1390,63 @@ class PingApp(QWidget):
                 padding: 5px;
                 outline: 0;
             }}
-            
+
             QListWidget::item {{
                 padding: 8px;
                 border-radius: 4px;
             }}
-            
+
             QListWidget::item:hover {{
                 background-color: {colors['hover']};
             }}
-            
+
             QListWidget::item:selected {{
                 background-color: {colors['accent_blue']};
                 color: white;
             }}
-            
+
             /* Ping result list specific */
             #PingResultList::item[success="true"] {{
                 background-color: {colors['success_bg']};
                 color: {colors['accent_green']};
             }}
-            
+
             #PingResultList::item[success="false"] {{
                 background-color: {colors['error_bg']};
                 color: {colors['accent_red']};
             }}
-            
+
             /* Connection status labels */
             #ConnectionStatus.status-good {{
                 color: {colors['accent_green']};
             }}
-            
+
             #ConnectionStatus.status-error {{
                 color: {colors['accent_red']};
                 font-weight: bold;
             }}
-            
+
             /* Alarm status */
             #AlarmStatus[ringing="true"] {{
                 color: {colors['accent_red']};
                 font-weight: bold;
-                animation: pulse 1s infinite;
             }}
-            
+
             /* Clock panel specific */
             #CurrentDateLabel {{
                 color: {colors['text_secondary']};
                 margin-top: 10px;
             }}
-            
+
             /* IP labels */
+            #LocalIpLabel, #PublicIpLabel {{
+                color: {colors['text_secondary']};
+            }}
             #LocalIpLabel:hover, #PublicIpLabel:hover {{
                 color: {colors['accent_blue']};
                 text-decoration: underline;
             }}
-            
+
             /* Buttons */
             .action-btn {{
                 background-color: {colors['tertiary']};
@@ -1181,26 +1455,38 @@ class PingApp(QWidget):
                 padding: 8px 16px;
                 color: {colors['text_primary']};
                 min-height: 36px;
+                font-weight: bold;
             }}
-            
+
             .action-btn:hover {{
                 background-color: {colors['hover']};
             }}
-            
+
             .action-btn:pressed {{
                 background-color: {colors['active']};
             }}
             
+            .action-btn:disabled {{
+                background-color: {colors['tertiary']};
+                color: {colors['text_muted']};
+            }}
+
             .action-btn.success {{
                 background-color: {colors['accent_green']};
                 color: white;
             }}
-            
+            .action-btn.success:hover {{
+                background-color: #38D08F;
+            }}
+
             .action-btn.danger {{
                 background-color: {colors['accent_red']};
                 color: white;
             }}
-            
+            .action-btn.danger:hover {{
+                background-color: #F84D49;
+            }}
+
             .stop-alarm-btn {{
                 background-color: {colors['accent_red']};
                 color: white;
@@ -1209,42 +1495,34 @@ class PingApp(QWidget):
                 padding: 10px;
                 border: none;
             }}
-            
+
             .stop-alarm-btn:hover {{
-                background-color: {colors['accent_red']};
-                opacity: 0.9;
+                background-color: #F84D49;
             }}
-            
+
             /* Menu bar */
             QMenuBar {{
                 background-color: {colors['secondary']};
                 padding: 5px;
                 border-bottom: 1px solid {colors['border']};
             }}
-            
+
             QMenuBar::item {{
                 padding: 5px 10px;
                 background-color: transparent;
                 border-radius: 4px;
             }}
-            
+
             QMenuBar::item:selected {{
                 background-color: {colors['hover']};
             }}
-            
+
             QMenuBar::item:pressed {{
                 background-color: {colors['active']};
             }}
-            
-            /* Animations */
-            @keyframes pulse {{
-                0% {{ opacity: 1.0; }}
-                50% {{ opacity: 0.5; }}
-                100% {{ opacity: 1.0; }}
-            }}
         """
         self.setStyleSheet(style)
-        
+
         # Apply style to menubar
         if self.layout() and self.layout().menuBar():
             self.layout().menuBar().setStyleSheet(f"""
@@ -1252,12 +1530,22 @@ class PingApp(QWidget):
                     background-color: {colors['secondary']};
                     color: {colors['text_primary']};
                 }}
+                QMenu {{
+                    background-color: {colors['secondary']};
+                    color: {colors['text_primary']};
+                    border: 1px solid {colors['border']};
+                }}
+                QMenu::item:selected {{
+                    background-color: {colors['hover']};
+                }}
             """)
 
         # Update graph colors
         if hasattr(self, 'graphWidget'):
             self.graphWidget.setBackground(colors['tertiary'])
             self.plot.setPen(pg.mkPen(color=colors['accent_blue'], width=2))
+            self.graphWidget.getAxis('bottom').setPen(pg.mkPen(color=colors['text_muted']))
+            self.graphWidget.getAxis('left').setPen(pg.mkPen(color=colors['text_muted']))
 
     def update_clock(self):
         """Update clock display with current time"""
@@ -1265,18 +1553,18 @@ class PingApp(QWidget):
             # Azerbaijan timezone (UTC+4)
             timezone = pytz.timezone('Asia/Baku')
             current_time = datetime.now(timezone)
-            
+
             # Update time
             time_str = current_time.strftime("%H:%M:%S")
             self.current_time_label.setText(time_str)
-            
+
             # Update date if day changed
             if not hasattr(self, 'last_date') or self.last_date != current_time.date():
                 self.last_date = current_time.date()
                 date_str = current_time.strftime('%d %B %Y, %A')
                 self.current_date_label.setText(date_str)
                 self.update_ip_info()
-                
+
         except Exception as e:
             print(f"Clock update error: {e}")
             self.current_time_label.setText(datetime.now().strftime("%H:%M:%S"))
@@ -1286,22 +1574,14 @@ class PingApp(QWidget):
         """Add new ping result to display"""
         item = QListWidgetItem(message)
         item.setData(Qt.UserRole + 1, "true" if is_success else "false")
-        
+
         if is_success:
             item.setForeground(QColor(COLORS['dark']['accent_green'] if dark_mode else COLORS['light']['accent_green']))
         else:
             item.setForeground(QColor(COLORS['dark']['accent_red'] if dark_mode else COLORS['light']['accent_red']))
-            
+
         self.ping_result_list.addItem(item)
         self.ping_result_list.scrollToBottom()
-        
-        # Add animation
-        animation = QPropertyAnimation(self.ping_result_list.itemWidget(item), b"opacity" if self.ping_result_list.itemWidget(item) else b"")
-        animation.setDuration(300)
-        animation.setStartValue(0)
-        animation.setEndValue(1)
-        animation.setEasingCurve(QEasingCurve.OutQuad)
-        animation.start()
 
     def update_connection_status(self, message, css_class):
         """Update connection status label"""
@@ -1316,16 +1596,7 @@ class PingApp(QWidget):
         self.alarm_status.setProperty("ringing", "true")
         self.style().polish(self.alarm_status)
         self.stop_alarm_btn.setVisible(True)
-        
-        # Add pulse animation
-        animation = QPropertyAnimation(self.alarm_status, b"opacity")
-        animation.setDuration(1000)
-        animation.setStartValue(1.0)
-        animation.setEndValue(0.5)
-        animation.setEasingCurve(QEasingCurve.InOutQuad)
-        animation.setLoopCount(-1)
-        animation.start()
-        
+
         # Bring app to front
         if self.isMinimized():
             self.showNormal()
@@ -1341,10 +1612,6 @@ class PingApp(QWidget):
         self.alarm_status.setProperty("ringing", "false")
         self.style().polish(self.alarm_status)
         self.stop_alarm_btn.setVisible(False)
-        
-        # Stop animations
-        for anim in self.alarm_status.findChildren(QPropertyAnimation):
-            anim.stop()
 
     def update_alarm_list_ui(self):
         """Refresh displayed alarm list"""
@@ -1354,20 +1621,20 @@ class PingApp(QWidget):
             item.setFlags(item.flags() | Qt.ItemIsUserCheckable)
             item.setCheckState(Qt.Checked if alarm.enabled else Qt.Unchecked)
             item.setData(Qt.UserRole, alarm)
-            
+
             # Set background based on status
             if alarm.enabled:
                 item.setBackground(QColor(COLORS['dark']['success_bg'] if dark_mode else COLORS['light']['success_bg']))
             else:
                 item.setBackground(QColor(COLORS['dark']['tertiary'] if dark_mode else COLORS['light']['tertiary']))
-                
+
             self.managed_alarms_list.addItem(item)
         self.reschedule_all_alarms()
 
     def add_new_alarm(self):
         """Add new alarm through dialog"""
-        text, ok = QInputDialog.getText(self, 
-                                      TEXTS["en" if english_language else "az"]["new_alarm_title"], 
+        text, ok = QInputDialog.getText(self,
+                                      TEXTS["en" if english_language else "az"]["new_alarm_title"],
                                       TEXTS["en" if english_language else "az"]["new_alarm_prompt"])
         if not ok or not text:
             return
@@ -1387,26 +1654,26 @@ class PingApp(QWidget):
         if time_dialog.exec_() == QDialog.Accepted:
             selected_time = time_edit.time()
             new_alarm = Alarm(selected_time.hour(), selected_time.minute(), True, text)
-            
+
             if new_alarm not in self.managed_alarms:
                 self.managed_alarms.append(new_alarm)
                 self.update_alarm_list_ui()
                 self.save_alarms_data()
             else:
-                QMessageBox.warning(self, 
-                                   TEXTS["en" if english_language else "az"]["new_alarm_title"], 
+                QMessageBox.warning(self,
+                                   TEXTS["en" if english_language else "az"]["new_alarm_title"],
                                    TEXTS["en" if english_language else "az"]["duplicate_alarm"])
 
     def delete_selected_alarm(self):
         """Delete selected alarms"""
         selected_items = self.managed_alarms_list.selectedItems()
         if not selected_items:
-            QMessageBox.information(self, 
-                                   TEXTS["en" if english_language else "az"]["new_alarm_title"], 
+            QMessageBox.information(self,
+                                   TEXTS["en" if english_language else "az"]["new_alarm_title"],
                                    TEXTS["en" if english_language else "az"]["no_selection"])
             return
 
-        reply = QMessageBox.question(self, 
+        reply = QMessageBox.question(self,
                                    TEXTS["en" if english_language else "az"]["new_alarm_title"],
                                    TEXTS["en" if english_language else "az"]["confirm_delete"].format(len(selected_items)),
                                    QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
@@ -1423,13 +1690,13 @@ class PingApp(QWidget):
         if alarm:
             alarm.enabled = item.checkState() == Qt.Checked
             item.setText(str(alarm))
-            
+
             # Update background color
             if alarm.enabled:
                 item.setBackground(QColor(COLORS['dark']['success_bg'] if dark_mode else COLORS['light']['success_bg']))
             else:
                 item.setBackground(QColor(COLORS['dark']['tertiary'] if dark_mode else COLORS['light']['tertiary']))
-                
+
             self.save_alarms_data()
             self.reschedule_all_alarms()
 
@@ -1444,12 +1711,12 @@ class PingApp(QWidget):
                 if alarm_dt_today <= now:
                     alarm_dt_today += timedelta(days=1)
                 active_alarm_timestamps.append(alarm_dt_today.timestamp())
-        
+
         active_alarm_timestamps.sort()
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)
-    
+
     # Create dummy icon if missing
     if not os.path.exists('icon.png'):
         try:
