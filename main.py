@@ -9,8 +9,10 @@ import re
 import subprocess
 import socket
 import pytz
+import numpy as np
 from geopy.geocoders import Nominatim
 import requests
+from classic_speedometer import ClassicSpeedometer
 
 # PyQt5 imports
 from PyQt5.QtWidgets import (
@@ -110,7 +112,9 @@ TEXTS = {
         "mbps": "Mbps",
         "close": "Close",
         "speed_test_error_title": "Speed Test Error",
-        "speed_test_failed": "Speed test failed: {}"
+        "speed_test_failed": "Speed test failed: {}",
+        "ping_success": "✅ Ping successful → Response time: {:.1f} ms (Connection stable)",
+        "ping_failure": "❌ Failure detected: Didn't reply within {:.1f} seconds. Server unavailable."
     },
     "az": {
         "main_title": "🚀 DNS Ping & Siqnal Monitoru",
@@ -166,7 +170,9 @@ TEXTS = {
         "mbps": "Mbit/s",
         "close": "Bağla",
         "speed_test_error_title": "Sürət Testi Xətası",
-        "speed_test_failed": "Sürət testi uğursuz oldu: {}"
+        "speed_test_failed": "Sürət testi uğursuz oldu: {}",
+        "ping_success": "✅ Ping uğurlu → Cavab müddəti: {:.1f} ms (Bağlantı sabit)",
+        "ping_failure": "❌ Uğursuzluq aşkarlandı: {:.1f} saniyə ərzində cavab vermədi. Server əlçatan deyil."
     }
 }
 
@@ -177,9 +183,9 @@ active_alarm_ringing = False
 # --- Modern Color Palette ---
 COLORS = {
     'dark': {
-        'primary': '#1E1E1E',
-        'secondary': '#1E1E1E',
-        'tertiary': '#252525',
+        'primary': '#000000',
+        'secondary': '#000000',
+        'tertiary': '#02040f',
         'accent_blue': '#4A9AFF',
         'accent_green': "#3DDC97",
         'accent_red': "#FF5E5B",
@@ -403,161 +409,226 @@ class SpeedTestThread(QThread):
 
 
 class SpeedTestDialog(QDialog):
-    """Dialog to display the animated speed test results."""
+    """Dialog to display speed test results with a speedometer-style interface."""
     def __init__(self, parent=None):
         super().__init__(parent)
         lang = "en" if english_language else "az"
         self.setWindowTitle(TEXTS[lang]["speed_test_results"])
-        self.setMinimumSize(800, 600)
-
-        self.download_data = []
-        self.download_time = []
-        self.upload_data = []
-        self.upload_time = []
-        self.start_time = time.time()
-
+        self.setFixedSize(975, 900)
+        
+        self.max_speed = 100
+        self.current_speed = 0
+        self.download_speed = 0
+        self.upload_speed = 0
+        self.test_phase = "download"
+        
         self.init_ui()
         self.apply_theme()
-
+        
         self.test_thread = SpeedTestThread()
-        self.test_thread.download_progress.connect(self.update_download_graph)
-        self.test_thread.upload_started.connect(self.prepare_for_upload)
-        self.test_thread.upload_progress.connect(self.update_upload_graph)
+        self.test_thread.download_progress.connect(self.update_download_progress)
+        self.test_thread.upload_progress.connect(self.update_upload_progress)
+        self.test_thread.upload_started.connect(self.on_upload_started)
         self.test_thread.test_finished.connect(self.on_test_finished)
         self.test_thread.error_signal.connect(self.on_test_error)
         self.test_thread.start()
 
     def init_ui(self):
+        self.layout = QVBoxLayout(self)
+        self.layout.setSpacing(40)
+        self.layout.setContentsMargins(30, 30, 30, 30)
+
+        # Speedometer Container (top part)
+        speedometer_container = QVBoxLayout()
+        speedometer_container.setAlignment(Qt.AlignCenter)
+
+        self.speedometer = ClassicSpeedometer(max_speed=100)
+        self.speedometer.setMinimumSize(480, 480)
+        self.speedometer.setMaximumSize(600, 600)
+        speedometer_container.addWidget(self.speedometer, 0, Qt.AlignCenter)
+
+        # Current speed display
+        speed_display_container = QVBoxLayout()
+        speed_display_container.setSpacing(8)
+        speed_display_container.setAlignment(Qt.AlignCenter)
+
+        self.speed_label = QLabel("0.00")
+        self.speed_label.setAlignment(Qt.AlignCenter)
+        self.speed_label.setFont(QFont("Arial", 48, QFont.Bold))
+
+        self.unit_label = QLabel("Mbps")
+        self.unit_label.setAlignment(Qt.AlignCenter)
+        self.unit_label.setFont(QFont("Arial", 18))
+
+        speed_display_container.addWidget(self.speed_label)
+        speed_display_container.addWidget(self.unit_label)
+
+        speedometer_container.addLayout(speed_display_container)
+        self.layout.addLayout(speedometer_container)
+
+        # -------------------------
+        # Results Container (bottom part)
+        # Bütün sonuçlar ve butonlar buraya toplanacak
+        self.results_container = QVBoxLayout()
+        self.results_container.setSpacing(20)
+        self.results_container.setContentsMargins(0, 0, 0, 0)
+        self.results_container.setAlignment(Qt.AlignTop | Qt.AlignHCenter)
+
         lang = "en" if english_language else "az"
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(15, 15, 15, 15)
-        layout.setSpacing(15)
 
-        self.status_label = QLabel(TEXTS[lang]["testing_download"])
-        self.status_label.setObjectName("StatusLabel")
-        self.status_label.setAlignment(Qt.AlignCenter)
-        layout.addWidget(self.status_label)
+        # Test mode label (Download/Upload/Completed)
+        self.mode_label = QLabel(TEXTS[lang]["testing_download"])
+        self.mode_label.setAlignment(Qt.AlignCenter)
+        self.mode_label.setFont(QFont("Arial", 16, QFont.Bold))
+        self.mode_label.setStyleSheet("margin: 20px 0px;")
+        self.results_container.addWidget(self.mode_label)
 
-        results_frame = QFrame()
-        results_layout = QHBoxLayout(results_frame)
+        # Results frame
+        self.results_frame = QFrame()
+        self.results_frame.setVisible(False)
+        self.results_frame.setFixedHeight(240)
+        self.results_frame.setStyleSheet("""
+            QFrame {
+                background-color: rgba(255,255,255,0.05);
+                border-radius: 12px;
+                padding: 10px;
+                margin: 5px 10px;
+            }
+        """)
 
-        # Download Panel
-        download_panel = QVBoxLayout()
-        download_title = QLabel(TEXTS[lang]["download_speed"])
-        download_title.setObjectName("SpeedTitleLabel")
-        self.download_label = QLabel(f"0.00 {TEXTS[lang]['mbps']}")
-        self.download_label.setObjectName("SpeedValueLabel")
-        download_panel.addWidget(download_title, alignment=Qt.AlignCenter)
-        download_panel.addWidget(self.download_label, alignment=Qt.AlignCenter)
+        results_layout = QHBoxLayout(self.results_frame)
+        results_layout.setSpacing(30)
 
-        # Upload Panel
-        upload_panel = QVBoxLayout()
-        upload_title = QLabel(TEXTS[lang]["upload_speed"])
-        upload_title.setObjectName("SpeedTitleLabel")
-        self.upload_label = QLabel(f"0.00 {TEXTS[lang]['mbps']}")
-        self.upload_label.setObjectName("SpeedValueLabel")
-        upload_panel.addWidget(upload_title, alignment=Qt.AlignCenter)
-        upload_panel.addWidget(self.upload_label, alignment=Qt.AlignCenter)
+        # Download container
+        download_container = QVBoxLayout()
+        download_container.setSpacing(5)
+        download_container.setAlignment(Qt.AlignCenter)
 
-        results_layout.addLayout(download_panel)
-        results_layout.addLayout(upload_panel)
-        layout.addWidget(results_frame)
+        self.download_title = QLabel(TEXTS[lang]["download_speed"])
+        self.download_title.setAlignment(Qt.AlignCenter)
+        self.download_title.setFont(QFont("Arial", 12, QFont.Bold))
+        self.download_title.setStyleSheet("color: #AAAAAA;")
 
-        self.graphWidget = pg.PlotWidget()
-        self.graphWidget.setLabel('left', "Speed (Mbps)")
-        self.graphWidget.setLabel('bottom', "Time (s)")
-        self.graphWidget.showGrid(x=True, y=True, alpha=0.3)
-        self.download_plot = self.graphWidget.plot(pen=pg.mkPen(width=3), name="Download")
-        self.upload_plot = self.graphWidget.plot(pen=pg.mkPen(width=3), name="Upload")
-        layout.addWidget(self.graphWidget)
+        self.download_result = QLabel("0.00 Mbps")
+        self.download_result.setAlignment(Qt.AlignCenter)
+        self.download_result.setFont(QFont("Arial", 16, QFont.Bold))
+        self.download_result.setStyleSheet("color: #3DDC97; margin-top: 5px;")
 
+        download_container.addWidget(self.download_title)
+        download_container.addWidget(self.download_result)
+
+        # Upload container
+        upload_container = QVBoxLayout()
+        upload_container.setSpacing(5)
+        upload_container.setAlignment(Qt.AlignCenter)
+
+        self.upload_title = QLabel(TEXTS[lang]["upload_speed"])
+        self.upload_title.setAlignment(Qt.AlignCenter)
+        self.upload_title.setFont(QFont("Arial", 12, QFont.Bold))
+        self.upload_title.setStyleSheet("color: #AAAAAA;")
+
+        self.upload_result = QLabel("0.00 Mbps")
+        self.upload_result.setAlignment(Qt.AlignCenter)
+        self.upload_result.setFont(QFont("Arial", 16, QFont.Bold))
+        self.upload_result.setStyleSheet("color: #FF9F1C; margin-top: 5px;")
+
+        upload_container.addWidget(self.upload_title)
+        upload_container.addWidget(self.upload_result)
+
+        results_layout.addLayout(download_container)
+        results_layout.addLayout(upload_container)
+
+        self.results_container.addWidget(self.results_frame)
+
+        # Close button
         self.close_button = QPushButton(TEXTS[lang]["close"])
-        self.close_button.setProperty("class", "action-btn")
+        self.close_button.setVisible(False)
+        self.close_button.setFixedHeight(90)
         self.close_button.clicked.connect(self.accept)
-        self.close_button.setEnabled(False)
-        layout.addWidget(self.close_button, alignment=Qt.AlignRight)
+        self.close_button.setStyleSheet("""
+            QPushButton {
+                background-color: #4A9AFF;
+                color: white;
+                border: none;
+                border-radius: 10px;
+                padding: 15px 25px;
+                font-size: 18px;
+                font-weight: bold;
+                margin: 15px 50px;
+            }
+            QPushButton:hover {
+                background-color: #3A8AEF;
+            }
+        """)
+        self.results_container.addWidget(self.close_button)
+
+        self.layout.addLayout(self.results_container)
+
+    # The rest of the methods remain unchanged
+
+    def update_download_progress(self, speed):
+        if self.test_phase == "download":
+            self.speedometer.set_speed(min(speed, 100))
+            self.speed_label.setText(f"{speed:.1f}")
+            self.download_speed = speed
+
+    def update_upload_progress(self, speed):
+        if self.test_phase == "upload":
+            self.speedometer.set_speed(min(speed, 100))
+            self.speed_label.setText(f"{speed:.1f}")
+            self.upload_speed = speed
+
+    def on_upload_started(self):
+        self.test_phase = "upload"
+        lang = "en" if english_language else "az"
+        self.mode_label.setText(TEXTS[lang]["testing_upload"])
+        self.download_result.setText(f"{self.download_speed:.1f} Mbps")
+
+    def on_test_finished(self, final_download, final_upload):
+        self.test_phase = "completed"
+        lang = "en" if english_language else "az"
+        self.download_speed = final_download
+        self.upload_speed = final_upload
+        self.download_result.setText(f"{final_download:.1f} Mbps")
+        self.upload_result.setText(f"{final_upload:.1f} Mbps")
+        self.mode_label.setText(TEXTS[lang]["test_completed"])
+        self.results_frame.setVisible(True)
+        self.close_button.setVisible(True)
+        self.speed_label.setVisible(False)
+        self.unit_label.setVisible(False)
+        max_speed = max(final_download, final_upload)
+        self.speedometer.set_speed(min(max_speed, 100))
 
     def apply_theme(self):
         colors = COLORS['dark'] if dark_mode else COLORS['light']
-        lang = "en" if english_language else "az"
-        style = f"""
+        self.setStyleSheet(f"""
             QDialog {{
                 background-color: {colors['primary']};
                 color: {colors['text_primary']};
-                font-family: 'Segoe UI', Arial, sans-serif;
             }}
-            #StatusLabel {{
-                font-size: 16px;
-                font-weight: bold;
-                color: {colors['text_secondary']};
-            }}
-            #SpeedTitleLabel {{
-                font-size: 14px;
-                color: {colors['text_muted']};
-            }}
-            #SpeedValueLabel {{
-                font-size: 28px;
-                font-weight: bold;
+            QLabel {{
                 color: {colors['text_primary']};
             }}
-            QPushButton.action-btn {{
-                background-color: {colors['tertiary']};
-                border: 1px solid {colors['border']};
-                border-radius: 6px; padding: 8px 16px;
-                color: {colors['text_primary']}; min-height: 28px;
+            QFrame {{
+                background-color: rgba(255,255,255,0.05);
+                border-radius: 10px;
             }}
-            QPushButton.action-btn:hover {{ background-color: {colors['hover']}; }}
-            QPushButton.action-btn:disabled {{
-                background-color: {colors['tertiary']};
-                color: {colors['text_muted']};
-            }}
-        """
-        self.setStyleSheet(style)
-        self.graphWidget.setBackground(colors['secondary'])
-        self.graphWidget.getAxis('bottom').setPen(pg.mkPen(color=colors['text_muted']))
-        self.graphWidget.getAxis('left').setPen(pg.mkPen(color=colors['text_muted']))
-        self.download_plot.setPen(pg.mkPen(color=colors['accent_blue'], width=3))
-        self.upload_plot.setPen(pg.mkPen(color=colors['accent_green'], width=3))
-
-    def update_download_graph(self, speed_mbps):
-        lang = "en" if english_language else "az"
-        self.download_time.append(time.time() - self.start_time)
-        self.download_data.append(speed_mbps)
-        self.download_plot.setData(self.download_time, self.download_data)
-        self.download_label.setText(f"{speed_mbps:.2f} {TEXTS[lang]['mbps']}")
-
-    def prepare_for_upload(self):
-        lang = "en" if english_language else "az"
-        self.status_label.setText(TEXTS[lang]["testing_upload"])
-        self.upload_time_offset = self.download_time[-1] if self.download_time else 0
-        self.upload_start_time = time.time()
-
-    def update_upload_graph(self, speed_mbps):
-        lang = "en" if english_language else "az"
-        if not hasattr(self, 'upload_start_time'): return
-        self.upload_time.append((time.time() - self.upload_start_time) + self.upload_time_offset)
-        self.upload_data.append(speed_mbps)
-        self.upload_plot.setData(self.upload_time, self.upload_data)
-        self.upload_label.setText(f"{speed_mbps:.2f} {TEXTS[lang]['mbps']}")
-
-    def on_test_finished(self, final_download, final_upload):
-        lang = "en" if english_language else "az"
-        self.status_label.setText(TEXTS[lang]["test_completed"])
-        self.download_label.setText(f"{final_download:.2f} {TEXTS[lang]['mbps']}")
-        self.upload_label.setText(f"{final_upload:.2f} {TEXTS[lang]['mbps']}")
-        self.close_button.setEnabled(True)
+        """)
 
     def on_test_error(self, error_message):
         lang = "en" if english_language else "az"
-        QMessageBox.critical(self, TEXTS[lang]["speed_test_error_title"], TEXTS[lang]["speed_test_failed"].format(error_message))
+        QMessageBox.critical(self, TEXTS[lang]["speed_test_error_title"], 
+                             TEXTS[lang]["speed_test_failed"].format(error_message))
         self.accept()
 
     def closeEvent(self, event):
         if self.test_thread.isRunning():
             self.test_thread.requestInterruption()
             self.test_thread.quit()
-            self.test_thread.wait(2000) # Wait up to 2s
+            self.test_thread.wait(2000)
         event.accept()
+
+
 
 class PingThread(QThread):
     """Thread for continuous ping monitoring"""
@@ -578,22 +649,23 @@ class PingThread(QThread):
         while self.running:
             response = ping_host(DNS_SERVER, timeout=PING_TIMEOUT)
             now_str = datetime.now().strftime('%H:%M:%S')
+            lang = "en" if english_language else "az"
 
             if response is not None:
                 self.consecutive_errors = 0
                 self.last_success_time = time.time()
-                msg = f"[{now_str}] 🟢 Successful → {response:.1f} ms"
-                status_msg = TEXTS["en" if english_language else "az"]["internet_good"]
+                msg = TEXTS[lang]["ping_success"].format(response)
+                status_msg = TEXTS[lang]["internet_good"]
                 self.status_signal.emit(status_msg, "status-good")
                 self.update_signal.emit(msg, True)
                 self.ping_result_signal.emit(response)
             else:
                 self.consecutive_errors += 1
                 elapsed = time.time() - self.last_success_time
-                msg = f"[{now_str}] 🔴 Failed → Timeout ({elapsed:.1f}s)"
+                msg = TEXTS[lang]["ping_failure"].format(elapsed)
                 self.update_signal.emit(msg, False)
                 if self.consecutive_errors >= self.max_errors_before_sound:
-                    status_msg = TEXTS["en" if english_language else "az"]["internet_poor"]
+                    status_msg = TEXTS[lang]["internet_poor"]
                     self.status_signal.emit(status_msg, "status-error")
                     self.sound_manager.play("error")
 
@@ -1713,7 +1785,6 @@ class PingApp(QWidget):
                 active_alarm_timestamps.append(alarm_dt_today.timestamp())
 
         active_alarm_timestamps.sort()
-
 if __name__ == "__main__":
     app = QApplication(sys.argv)
 
